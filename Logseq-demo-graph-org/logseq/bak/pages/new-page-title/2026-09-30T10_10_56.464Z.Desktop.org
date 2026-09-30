@@ -1,0 +1,21 @@
+#+PROP-A: local
+#+PROB-B: not
+#+long-form: nothing
+
+*
+* perspiciatis unde omnis iste natus error sit voluptatem
+* adipisci velit, sed quia non numquam eius modi tempora incidunt ut labore et dolore magnam aliquam quaerat voluptatem
+** accusantium doloremque laudantium, totam rem aperiam, eaque ipsa
+:PROPERTIES:
+:id: 6abcc405-80ed-445c-8322-b7a29ab8f2b0
+:END:
+*** onsectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi 
+:PROPERTIES:
+:total: 5
+:number: twenty  
+:END:
+* {{embed ((6abcc4b7-c4a4-48d2-8aa3-61d986658b0f))}}
+#+long-form: nothing
+
+* veritatis et quasi architecto beatae vitae dicta sunt explicabo.
+*

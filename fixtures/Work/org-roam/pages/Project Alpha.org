@@ -1,0 +1,9 @@
+:PROPERTIES:
+:ID: 10000000-0000-0000-0000-000000000001
+:ROAM_ALIASES: "Alpha" "ProjA"
+:END:
+#+title: Project Alpha
+
+* TODO Draft the proposal
+** Share with [[id:10000000-0000-0000-0000-000000000002][Meeting Notes]]
+* DONE Ship the first milestone

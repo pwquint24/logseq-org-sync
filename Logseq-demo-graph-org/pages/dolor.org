@@ -1,0 +1,7 @@
+* et quasi architecto beatae vitae dicta sunt explicabo
+* {{query }}
+:PROPERTIES:
+:query-properties: [:page]
+:query-table: false
+:END:
+*

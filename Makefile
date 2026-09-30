@@ -10,6 +10,26 @@ SRC = $(LISP).el
 TESTS = $(LISP)-test.el
 BYTEC = $(SRC)c
 
+SYNC_LISP = logseq-org-sync-logseq
+SYNC_SRC = $(SYNC_LISP).el
+SYNC_TESTS = $(SYNC_LISP)-test.el
+SYNC_BYTEC = $(SYNC_SRC)c
+
+SYNC_ROAM_LISP = logseq-org-sync-roam
+SYNC_ROAM_SRC = $(SYNC_ROAM_LISP).el
+SYNC_ROAM_TESTS = $(SYNC_ROAM_LISP)-test.el
+SYNC_ROAM_BYTEC = $(SYNC_ROAM_SRC)c
+
+SYNC_ID_LISP = logseq-org-sync-identity
+SYNC_ID_SRC = $(SYNC_ID_LISP).el
+SYNC_ID_TESTS = $(SYNC_ID_LISP)-test.el
+SYNC_ID_BYTEC = $(SYNC_ID_SRC)c
+
+SYNC_STATE_LISP = logseq-org-sync-state
+SYNC_STATE_SRC = $(SYNC_STATE_LISP).el
+SYNC_STATE_TESTS = $(SYNC_STATE_LISP)-test.el
+SYNC_STATE_BYTEC = $(SYNC_STATE_SRC)c
+
 # Should pull the following dependencies:
 REQS := org-roam mocker
 
@@ -35,19 +55,23 @@ BATCH = $(EMACS) -Q --batch --eval $(INIT_PACKAGE_EL)
 
 all: compile
 
-compile: $(BYTEC)
+compile: $(BYTEC) $(SYNC_BYTEC) $(SYNC_ROAM_BYTEC) $(SYNC_ID_BYTEC) $(SYNC_STATE_BYTEC)
 
-test: $(BYTEC)
+test: $(BYTEC) $(SYNC_BYTEC) $(SYNC_ROAM_BYTEC) $(SYNC_ID_BYTEC) $(SYNC_STATE_BYTEC)
 	$(BATCH) \
 		-L . \
 		-l $(TESTS) \
+		-l $(SYNC_TESTS) \
+		-l $(SYNC_ROAM_TESTS) \
+		-l $(SYNC_ID_TESTS) \
+		-l $(SYNC_STATE_TESTS) \
 		-f ert-run-tests-batch-and-exit
 
 purge: clean
 	$(RM) -r $(PKGCACHE)
 
 clean:
-	$(RM) $(BYTEC)
+	$(RM) $(BYTEC) $(SYNC_BYTEC) $(SYNC_ROAM_BYTEC) $(SYNC_ID_BYTEC) $(SYNC_STATE_BYTEC)
 
 README.md: make-readme-markdown.el $(SRC)
 	$(EMACS) -Q --script $< <$(SRC) >$@

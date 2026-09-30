@@ -1,0 +1,21 @@
+;; Minimal Logseq configuration for the two-way sync fixture.
+;;
+;; These are the settings the sync engine assumes on the Logseq side:
+;;   - :preferred-format "Org"         -> pages are stored as .org files
+;;   - :pages-directory "pages"        -> page files live under pages/
+;;   - :journals-directory "journals"  -> journal files live under journals/
+;;   - :journal/file-name-format "yyyy-MM-dd"
+;;     :journal/page-title-format "yyyy-MM-dd"
+;;       -> journals use an ISO-style date (see journals/2026-09-30.org)
+;;
+;; NOTE: Logseq config uses Java-style date formats (yyyy-MM-dd); the sync
+;; engine's own per-graph config uses Emacs format-time-string formats
+;; (e.g. "%Y-%m-%d"). Keep the two representations distinct.
+
+{:preferred-format "Org"
+ :preferred-workflow :todo
+ :pages-directory "pages"
+ :journals-directory "journals"
+ :journal/page-title-format "yyyy-MM-dd"
+ :journal/file-name-format "yyyy-MM-dd"
+ :file/name-format :triple-lowbar}
