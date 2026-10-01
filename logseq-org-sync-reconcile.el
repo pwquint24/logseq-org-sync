@@ -1,0 +1,515 @@
+;;; logseq-org-sync-reconcile.el --- Two-way reconciler -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026 logseq-org-sync authors
+
+;; This file is NOT part of GNU Emacs.
+
+;; This program is free software: you can redistribute it and/or modify it under
+;; the terms of the GNU General Public License as published by the Free Software
+;; Foundation, either version 3 of the License, or (at your option) any later
+;; version.
+;;
+;; This program is distributed in the hope that it will be useful, but WITHOUT
+;; ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+;; FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+;; details.
+;;
+;; You should have received a copy of the GNU General Public License along with
+;; this program.  If not, see <https://www.gnu.org/licenses/>.
+
+;;; Commentary:
+
+;; The reconciler for the two-way sync engine (Phase 5, AGENTS.md §7).  It
+;; reads both a Logseq graph and its org-roam mirror, classifies every node by
+;; its shared UUID, and produces an ordered *plan* of actions that bring the
+;; two sides into agreement.  A separate `apply' step executes the plan.
+;;
+;; Planning is a pure function of (graph, state): it reads files but never
+;; writes them, so it can be reused verbatim for a dry-run preview (Phase 6,
+;; `logseq-org-sync-safety').  Only `logseq-org-sync-reconcile-apply' mutates
+;; the filesystem and the state store.
+;;
+;; ## Graph configuration
+;;
+;; A graph is a plist describing one Logseq/org-roam pair (AGENTS.md §2):
+;;
+;;     (:name "work"
+;;      :logseq-root "~/graphs/Work"
+;;      :roam-root   "/org-roam/Work"
+;;      :pages-directory "pages"
+;;      :journals-directory "journals")
+;;
+;; The two roots hold identically-named `pages/' and `journals/' subtrees, so a
+;; node's path relative to its root is the same on both sides.
+;;
+;; ## Node tables
+;;
+;; Each side is read into a table keyed by UUID.  A table value is a plist:
+;;
+;;     (:id UUID :path RELATIVE :abs ABSOLUTE :node IR :hash SHA256
+;;      :mtime MTIME :title TITLE)
+;;
+;; `:path' is relative to the graph root (so it is comparable across sides);
+;; `:node' is the parsed IR (AGENTS.md §5); `:hash' is the SHA-256 of the file
+;; contents and `:mtime' its modification time.
+;;
+;; ## Actions
+;;
+;; The plan is an ordered list of action plists.  Every action carries `:type'
+;; plus a `:reason' (a symbol explaining the classification) and the data the
+;; executor needs:
+;;
+;;     (:type create-roam   :id UUID :path REL :node IR :reason new)
+;;     (:type create-logseq :id UUID :path REL :node IR :reason new)
+;;     (:type update-roam   :id UUID :path REL :node IR :reason modified)
+;;     (:type update-logseq :id UUID :path REL :node IR :reason modified)
+;;     (:type seed          :id UUID :path REL :node IR :reason seed)
+;;     (:type rename-roam   :id UUID :from REL :to REL :reason renamed)
+;;     (:type rename-logseq :id UUID :from REL :to REL :reason renamed)
+;;     (:type trash-roam    :id UUID :path REL :abs ABS :reason deleted)
+;;     (:type trash-logseq  :id UUID :path REL :abs ABS :reason deleted)
+;;
+;; `:reason' is one of `new', `modified', `newest-wins', `renamed', `deleted',
+;; or `conflict' (only used when the conflict policy is `prompt' and unresolved;
+;; see Phase 6).
+;;
+;; ## Classification (AGENTS.md §7 step 3)
+;;
+;; For each UUID present on either side:
+;;
+;; - new on Logseq only  -> `create-roam'  (convert logseq -> roam)
+;; - new on org-roam only -> `create-logseq' (convert roam -> logseq)
+;; - modified on Logseq only -> `update-roam'
+;; - modified on org-roam only -> `update-logseq'
+;; - modified on both -> newest file wins (default) or prompt (opt-in)
+;; - renamed (path changed, content identical, on both sides) -> `rename-*'
+;; - deleted on one side, unchanged on the other -> `trash-*' on the other
+;;
+;; "Modified" is detected by comparing the file's SHA-256 against the hash the
+;; state store recorded at the last sync (AGENTS.md §4).  A side with no state
+;; record but a present file is treated as modified (it is new *to the engine*).
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'logseq-org-sync-logseq)
+(require 'logseq-org-sync-roam)
+(require 'logseq-org-sync-identity)
+(require 'logseq-org-sync-state)
+
+(defconst logseq-org-sync-reconcile-trash-directory ".trash"
+  "Subdirectory, under a graph root, that receives trashed files.
+Deletions are moved here rather than hard-deleted (AGENTS.md §1.7).")
+
+(defgroup logseq-org-sync nil
+  "Two-way sync between a Logseq graph and an org-roam directory."
+  :group 'files
+  :prefix "logseq-org-sync-")
+
+(defcustom logseq-org-sync-reconcile-conflict-policy 'newest-wins
+  "How to resolve a node modified on both sides.
+- `newest-wins' (default): the file with the more recent modification
+  time is propagated to the other side, without prompting (AGENTS.md §6).
+- `prompt': ask the user which side to keep."
+  :type '(choice (const :tag "Newest file wins" newest-wins)
+                 (const :tag "Prompt on conflict" prompt))
+  :group 'logseq-org-sync)
+
+(defcustom logseq-org-sync-reconcile-prompt-function
+  #'logseq-org-sync-reconcile--prompt-default
+  "Function called to resolve a conflict when the policy is `prompt'.
+It is called with the node's UUID and the two table entries (Logseq
+first); it should return `logseq' or `roam'."
+  :type 'function
+  :group 'logseq-org-sync)
+
+(defun logseq-org-sync-reconcile--prompt-default (_id _logseq _roam)
+  "Default conflict prompt.
+Ask the user which side to keep and return `logseq' or `roam'."
+  (if (y-or-n-p "Conflict; keep the Logseq version? ")
+      'logseq
+    'roam))
+
+(defun logseq-org-sync-reconcile--file-hash (file)
+  "Return the SHA-256 of FILE's contents, or nil when unreadable."
+  (when (file-readable-p file)
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (insert-file-contents-literally file)
+      (secure-hash 'sha256 (current-buffer)))))
+
+(defun logseq-org-sync-reconcile--file-mtime (file)
+  "Return FILE's modification time as a time value, or nil when unavailable.
+The value is suitable for `time-less-p' and matches
+`file-attribute-modification-time' (AGENTS.md §4)."
+  (file-attribute-modification-time (file-attributes file)))
+
+(defun logseq-org-sync-reconcile--relative (root abs)
+  "Return ABS relative to ROOT (with `/' separators)."
+  (file-relative-name abs (file-name-as-directory (expand-file-name root))))
+
+(defun logseq-org-sync-reconcile--table-entry (root abs node)
+  "Return a node-table plist for ABS (under ROOT) parsed into NODE."
+  (list :id (plist-get node :id)
+        :path (logseq-org-sync-reconcile--relative root abs)
+        :abs abs
+        :node node
+        :hash (logseq-org-sync-reconcile--file-hash abs)
+        :mtime (logseq-org-sync-reconcile--file-mtime abs)
+        :title (plist-get node :title)))
+
+(defun logseq-org-sync-reconcile--build-table (root scan-fn parse-fn pages journals)
+  "Return a UUID-keyed hash table for files under ROOT.
+SCAN-FN lists the files (root/pages/journals); PARSE-FN parses a file
+into an IR node; PAGES and JOURNALS name the subtrees to scan.  Files
+without a `:id' are keyed by their relative path prefixed with
+\"path:\" so they still participate in the sync."
+  (let ((table (make-hash-table :test #'equal)))
+    (dolist (abs (funcall scan-fn root pages journals))
+      (let* ((node (funcall parse-fn abs))
+             (entry (logseq-org-sync-reconcile--table-entry root abs node))
+             (key (or (plist-get node :id)
+                      (concat "path:" (plist-get entry :path)))))
+        (puthash key entry table)))
+    table))
+
+(defun logseq-org-sync-reconcile--scan-logseq (graph)
+  "Return a UUID-keyed table of the Logseq side of GRAPH."
+  (logseq-org-sync-reconcile--build-table
+   (plist-get graph :logseq-root)
+   #'logseq-org-sync-logseq-scan
+   #'logseq-org-sync-logseq-parse-file
+   (plist-get graph :pages-directory)
+   (plist-get graph :journals-directory)))
+
+(defun logseq-org-sync-reconcile--scan-roam (graph)
+  "Return a UUID-keyed table of the org-roam side of GRAPH."
+  (logseq-org-sync-reconcile--build-table
+   (plist-get graph :roam-root)
+   #'logseq-org-sync-roam-scan
+   #'logseq-org-sync-roam-parse-file
+   (plist-get graph :pages-directory)
+   (plist-get graph :journals-directory)))
+
+(defun logseq-org-sync-reconcile--side-modified-p (entry state key)
+  "Non-nil when ENTRY's content differs from its last-synced hash.
+KEY is the STATE record's hash field (`:logseq-hash' or `:roam-hash').
+A missing STATE record means the side is new to the engine, i.e. modified."
+  (let* ((id (plist-get entry :id))
+         (record (and id state (logseq-org-sync-state-get state id)))
+         (known (and record (plist-get record key))))
+    (not (equal known (plist-get entry :hash)))))
+
+(defun logseq-org-sync-reconcile--newer-side (logseq-entry roam-entry)
+  "Return `logseq' or `roam' for whichever side has the newer mtime.
+LOGSEQ-ENTRY and ROAM-ENTRY are the two table entries.  Ties (or missing
+mtimes) favour `logseq'."
+  (let ((lt (plist-get logseq-entry :mtime))
+        (rt (plist-get roam-entry :mtime)))
+    (if (and lt rt (time-less-p lt rt)) 'roam 'logseq)))
+
+(defun logseq-org-sync-reconcile--action (type id node path reason &rest extra)
+  "Build an action plist of TYPE for ID.
+NODE and PATH describe the source; REASON records the classification;
+EXTRA supplies additional key/value pairs (e.g. `:abs', `:from', `:to')."
+  (let ((action (list :type type
+                      :id id
+                      :path path
+                      :node node
+                      :reason reason)))
+    (while extra
+      (setq action (plist-put action (car extra) (cadr extra)))
+      (setq extra (cddr extra)))
+    action))
+
+(defun logseq-org-sync-reconcile--node-for (entry)
+  "Return ENTRY's IR node, or nil."
+  (plist-get entry :node))
+
+(defun logseq-org-sync-reconcile--classify-new (id logseq-entry roam-entry)
+  "Classify the node ID when present on only one side.
+LOGSEQ-ENTRY and ROAM-ENTRY are the (possibly nil) table entries."
+  (cond
+   ((and logseq-entry (not roam-entry))
+    (list (logseq-org-sync-reconcile--action
+           'create-roam id
+           (logseq-org-sync-reconcile--node-for logseq-entry)
+           (plist-get logseq-entry :path) 'new)))
+   ((and roam-entry (not logseq-entry))
+    (list (logseq-org-sync-reconcile--action
+           'create-logseq id
+           (logseq-org-sync-reconcile--node-for roam-entry)
+           (plist-get roam-entry :path) 'new)))
+   (t nil)))
+
+(defun logseq-org-sync-reconcile--classify-both (id logseq-entry roam-entry state)
+  "Classify the node ID present on both sides.
+Return a list of actions reconciling LOGSEQ-ENTRY and ROAM-ENTRY given
+the last-synced STATE (AGENTS.md §7)."
+  (let* ((record (and state (logseq-org-sync-state-get state id)))
+         (l-mod (logseq-org-sync-reconcile--side-modified-p
+                 logseq-entry state :logseq-hash))
+         (r-mod (logseq-org-sync-reconcile--side-modified-p
+                 roam-entry state :roam-hash))
+         (l-path (plist-get logseq-entry :path))
+         (r-path (plist-get roam-entry :path)))
+    (cond
+     ;; Never synced: record both sides as a baseline (no write).
+     ((not record)
+      (list (logseq-org-sync-reconcile--action
+             'seed id
+             (logseq-org-sync-reconcile--node-for logseq-entry)
+             (or l-path r-path) 'seed)))
+     ;; Content identical (both unchanged): maybe just a rename to mirror.
+     ((and (not l-mod) (not r-mod))
+      (logseq-org-sync-reconcile--classify-rename
+       id logseq-entry roam-entry record))
+     ;; Only Logseq changed.
+     ((and l-mod (not r-mod))
+      (list (logseq-org-sync-reconcile--action
+             'update-roam id
+             (logseq-org-sync-reconcile--node-for logseq-entry)
+             l-path 'modified)))
+     ;; Only org-roam changed.
+     ((and r-mod (not l-mod))
+      (list (logseq-org-sync-reconcile--action
+             'update-logseq id
+             (logseq-org-sync-reconcile--node-for roam-entry)
+             r-path 'modified)))
+     ;; Both changed: newest wins, or prompt.
+     (t
+      (let ((side (if (eq logseq-org-sync-reconcile-conflict-policy 'prompt)
+                      (funcall logseq-org-sync-reconcile-prompt-function
+                               id logseq-entry roam-entry)
+                    (logseq-org-sync-reconcile--newer-side
+                     logseq-entry roam-entry))))
+        (if (eq side 'logseq)
+            (list (logseq-org-sync-reconcile--action
+                   'update-roam id
+                   (logseq-org-sync-reconcile--node-for logseq-entry)
+                   l-path
+                   (if (eq logseq-org-sync-reconcile-conflict-policy 'prompt)
+                       'conflict 'newest-wins)))
+          (list (logseq-org-sync-reconcile--action
+                 'update-logseq id
+                 (logseq-org-sync-reconcile--node-for roam-entry)
+                 r-path
+                 (if (eq logseq-org-sync-reconcile-conflict-policy 'prompt)
+                     'conflict 'newest-wins)))))))))
+
+(defun logseq-org-sync-reconcile--classify-rename (id logseq-entry roam-entry
+                                                      record)
+  "Return rename actions for ID when a side's relative path changed vs RECORD.
+Both LOGSEQ-ENTRY and ROAM-ENTRY are unchanged, so a differing path is a
+rename that must be mirrored to the other side (AGENTS.md §7).  Nil RECORD
+means the node has never been synced, so path differences are not treated
+as renames."
+  (when record
+    (let ((l-path (plist-get logseq-entry :path))
+          (r-path (plist-get roam-entry :path))
+          (l-known (plist-get record :logseq-path))
+          (r-known (plist-get record :roam-path)))
+      (cond
+       ;; Logseq renamed: mirror the new name onto the org-roam side.
+       ((and l-known r-known (not (equal l-path l-known)) (equal r-path r-known))
+        (list (logseq-org-sync-reconcile--action
+               'rename-roam id nil l-path 'renamed :from r-known :to l-path)))
+       ;; org-roam renamed: mirror the new name onto the Logseq side.
+       ((and l-known r-known (equal l-path l-known) (not (equal r-path r-known)))
+        (list (logseq-org-sync-reconcile--action
+               'rename-logseq id nil r-path 'renamed :from l-known :to r-path)))
+       (t nil)))))
+
+(defun logseq-org-sync-reconcile--classify-deleted (id logseq-entry roam-entry
+                                                       state graph)
+  "Classify the node ID present on only one side but known to STATE.
+Of LOGSEQ-ENTRY and ROAM-ENTRY exactly one is non-nil; the missing side's
+copy was deleted, so mirror the deletion into that side's trash
+\(AGENTS.md §7).  GRAPH supplies the roots."
+  (let ((record (and state (logseq-org-sync-state-get state id))))
+    (when record
+      (cond
+       ;; Deleted on Logseq, still present on org-roam -> trash the roam copy.
+       ((and (not logseq-entry) roam-entry)
+        (let ((path (plist-get record :roam-path)))
+          (when path
+            (list (logseq-org-sync-reconcile--action
+                   'trash-roam id nil path 'deleted
+                   :abs (logseq-org-sync-reconcile--abs graph 'roam path))))))
+       ;; Deleted on org-roam, still present on Logseq -> trash the logseq copy.
+       ((and logseq-entry (not roam-entry))
+        (let ((path (plist-get record :logseq-path)))
+          (when path
+            (list (logseq-org-sync-reconcile--action
+                   'trash-logseq id nil path 'deleted
+                   :abs (logseq-org-sync-reconcile--abs graph 'logseq path))))))))))
+
+(defun logseq-org-sync-reconcile--merge-classify (id logseq-entry roam-entry
+                                                     state graph)
+  "Classify the node ID given its LOGSEQ-ENTRY, ROAM-ENTRY, STATE and GRAPH."
+  (cond
+   ;; Present on both sides.
+   ((and logseq-entry roam-entry)
+    (logseq-org-sync-reconcile--classify-both id logseq-entry roam-entry state))
+   ;; Present on at least one side: a mirrored deletion, else new.
+   (t
+    (or (logseq-org-sync-reconcile--classify-deleted
+         id logseq-entry roam-entry state graph)
+        (logseq-org-sync-reconcile--classify-new id logseq-entry roam-entry)))))
+
+(defun logseq-org-sync-reconcile-plan (graph state)
+  "Return an ordered reconciliation plan for GRAPH given the last-synced STATE.
+The plan is a list of action plists (see the file Commentary).  Planning
+reads files but performs no writes, so it is safe to call for a preview."
+  (let ((logseq (logseq-org-sync-reconcile--scan-logseq graph))
+        (roam (logseq-org-sync-reconcile--scan-roam graph))
+        (ids nil)
+        (plan nil))
+    ;; Collect every key from both tables, Logseq first for stable ordering.
+    (maphash (lambda (id _entry) (unless (member id ids) (push id ids))) logseq)
+    (maphash (lambda (id _entry) (unless (member id ids) (push id ids))) roam)
+    (setq ids (nreverse ids))
+    (dolist (id ids)
+      (setq plan
+            (append plan
+                    (logseq-org-sync-reconcile--merge-classify
+                     id (gethash id logseq) (gethash id roam) state graph))))
+    plan))
+
+;;;###autoload
+(defun logseq-org-sync-reconcile-dry-run (graph state)
+  "Return the plan for GRAPH against STATE without touching the filesystem.
+Alias for `logseq-org-sync-reconcile-plan' highlighting its safety."
+  (logseq-org-sync-reconcile-plan graph state))
+
+(defun logseq-org-sync-reconcile--write-logseq (node abs)
+  "Write NODE to ABS using the Logseq writer."
+  (make-directory (file-name-directory abs) t)
+  (logseq-org-sync-logseq-write node abs))
+
+(defun logseq-org-sync-reconcile--write-roam (node abs)
+  "Write NODE to ABS using the org-roam writer."
+  (make-directory (file-name-directory abs) t)
+  (logseq-org-sync-roam-write node abs))
+
+(defun logseq-org-sync-reconcile--trash (abs root)
+  "Move ABS into ROOT's trash subdirectory (AGENTS.md §1.7).
+Returns the destination path, or nil for a nil ABS.  Missing files are
+ignored.  The relative path under ROOT is preserved inside the trash."
+  (when (and abs (file-exists-p abs))
+    (let* ((rel (logseq-org-sync-reconcile--relative root abs))
+           (dest (expand-file-name
+                  (concat logseq-org-sync-reconcile-trash-directory "/" rel)
+                  (expand-file-name root))))
+      (make-directory (file-name-directory dest) t)
+      (rename-file abs dest 'ok-if-already-exists)
+      dest)))
+
+(defun logseq-org-sync-reconcile--abs (graph side path)
+  "Return PATH made absolute under GRAPH's SIDE root."
+  (expand-file-name path
+                    (expand-file-name (plist-get graph
+                                                 (if (eq side 'logseq)
+                                                     :logseq-root
+                                                   :roam-root)))))
+
+(defun logseq-org-sync-reconcile--record (state action graph)
+  "Return STATE updated with metadata for ACTION, using GRAPH roots.
+Hash/mtime are read back from both sides.  Paths follow the 1:1 mapping
+\(AGENTS.md §2): create/update/seed leave both sides at `:path', while a
+rename leaves both sides at `:to'."
+  (let* ((id (plist-get action :id))
+         (type (plist-get action :type))
+         (path (plist-get action :path))
+         (existing (logseq-org-sync-state-get state id))
+         (record (or existing (list :id id)))
+         (logseq-path (plist-get existing :logseq-path))
+         (roam-path (plist-get existing :roam-path)))
+    ;; Determine each side's final relative path.
+    (pcase type
+      ((or 'create-roam 'update-roam 'create-logseq 'update-logseq 'seed)
+       (setq logseq-path path roam-path path))
+      ('rename-roam
+       (setq roam-path (plist-get action :to) logseq-path (plist-get action :to)))
+      ('rename-logseq
+       (setq logseq-path (plist-get action :to) roam-path (plist-get action :to))))
+    (when logseq-path (setq record (plist-put record :logseq-path logseq-path)))
+    (when roam-path (setq record (plist-put record :roam-path roam-path)))
+    (when (plist-get action :node)
+      (setq record (plist-put record :title
+                              (plist-get (plist-get action :node) :title))))
+    (let ((l-abs (and logseq-path
+                      (logseq-org-sync-reconcile--abs graph 'logseq logseq-path)))
+          (r-abs (and roam-path
+                      (logseq-org-sync-reconcile--abs graph 'roam roam-path))))
+      (when l-abs
+        (setq record (plist-put record :logseq-hash
+                                (logseq-org-sync-reconcile--file-hash l-abs)))
+        (setq record (plist-put record :logseq-mtime
+                                (logseq-org-sync-reconcile--file-mtime l-abs))))
+      (when r-abs
+        (setq record (plist-put record :roam-hash
+                                (logseq-org-sync-reconcile--file-hash r-abs)))
+        (setq record (plist-put record :roam-mtime
+                                (logseq-org-sync-reconcile--file-mtime r-abs)))))
+    (setq record (plist-put record :last-sync (current-time)))
+    (logseq-org-sync-state-put state record)))
+
+;;;###autoload
+(defun logseq-org-sync-reconcile-apply (graph state plan)
+  "Execute PLAN for GRAPH, returning the updated STATE.
+Each action is performed and the state store is updated with the new
+paths, hashes, and mtimes (AGENTS.md §4, §7 step 4).  Deletions are
+moved to trash, never hard-deleted."
+  (dolist (action plan)
+    (let ((type (plist-get action :type))
+          (id (plist-get action :id))
+          (path (plist-get action :path))
+          (node (plist-get action :node)))
+      (pcase type
+        ('create-roam
+         (logseq-org-sync-reconcile--write-roam
+          node (logseq-org-sync-reconcile--abs graph 'roam path)))
+        ('update-roam
+         (logseq-org-sync-reconcile--write-roam
+          node (logseq-org-sync-reconcile--abs graph 'roam path)))
+        ('create-logseq
+         (logseq-org-sync-reconcile--write-logseq
+          node (logseq-org-sync-reconcile--abs graph 'logseq path)))
+        ('update-logseq
+         (logseq-org-sync-reconcile--write-logseq
+          node (logseq-org-sync-reconcile--abs graph 'logseq path)))
+        ('rename-roam
+         (let ((from (logseq-org-sync-reconcile--abs graph 'roam
+                                                     (plist-get action :from)))
+               (to (logseq-org-sync-reconcile--abs graph 'roam
+                                                   (plist-get action :to))))
+           (make-directory (file-name-directory to) t)
+           (when (file-exists-p from)
+             (rename-file from to 'ok-if-already-exists))))
+        ('rename-logseq
+         (let ((from (logseq-org-sync-reconcile--abs graph 'logseq
+                                                     (plist-get action :from)))
+               (to (logseq-org-sync-reconcile--abs graph 'logseq
+                                                   (plist-get action :to))))
+           (make-directory (file-name-directory to) t)
+           (when (file-exists-p from)
+             (rename-file from to 'ok-if-already-exists))))
+        ('trash-roam
+         (logseq-org-sync-reconcile--trash
+          (or (plist-get action :abs)
+              (logseq-org-sync-reconcile--abs graph 'roam path))
+          (plist-get graph :roam-root))
+         (setq state (logseq-org-sync-state-remove state id)))
+        ('trash-logseq
+         (logseq-org-sync-reconcile--trash
+          (or (plist-get action :abs)
+              (logseq-org-sync-reconcile--abs graph 'logseq path))
+          (plist-get graph :logseq-root))
+         (setq state (logseq-org-sync-state-remove state id))))
+      (unless (memq type '(trash-roam trash-logseq))
+        (setq state (logseq-org-sync-reconcile--record state action graph)))))
+  state)
+
+(provide 'logseq-org-sync-reconcile)
+;;; logseq-org-sync-reconcile.el ends here

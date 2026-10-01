@@ -41,6 +41,14 @@ The directory currently contains:
 - `logseq-org-sync-state.el` — the Phase 4 metadata state store (load/save of
   last-synced paths/hashes/mtimes; see §9.10).
 - `logseq-org-sync-state-test.el` — the ERT test suite for it.
+- `logseq-org-sync-reconcile.el` — the Phase 5 reconciler (scan both sides,
+  classify by UUID, produce/apply an action plan; see §9.11).
+- `logseq-org-sync-reconcile-test.el` — the ERT test suite for it (seed,
+  create/update, newest-wins, rename, delete/trash, dry-run, convergence).
+- `logseq-org-sync-safety.el` — the Phase 6 safety & UX layer (dry-run
+  preview, pre-overwrite backup, updated hook; see §9.12).
+- `logseq-org-sync-safety-test.el` — the ERT test suite for it (dry-run
+  rendering, backup on/off, conflict prompt, updated hook).
 - `Logseq-Demo-Graph-main/` — the upstream Logseq demo graph (`.md`; **not a
   usable fixture** — the supported Logseq format is `.org`).
 - `Logseq-demo-graph-org/` — a `.org` demo graph (`pages/`, `journals/`,
@@ -564,6 +572,104 @@ org-roam note, it should prefer org-roam's built-in node-creation path —
 `org-id-get-create` for the `:ID:` property) — over hand-writing the file, so
 org-roam's database and hooks stay consistent.  The identity module above is
 the ID half of that path.
+
+### 9.11 Phase 5 module — `logseq-org-sync-reconcile.el`
+
+The reconciler (AGENTS.md §7).  It reads both a Logseq graph and its org-roam
+mirror, classifies every node by its shared UUID, and produces an ordered
+**plan** of actions; a separate apply step executes it.  Planning is pure
+(reads files, never writes), so the same plan powers the Phase 6 dry-run.
+
+**Graph configuration.**  A graph is a plist describing one Logseq/org-roam
+pair (AGENTS.md §2):
+
+```
+(:name "work"
+ :logseq-root "~/graphs/Work"
+ :roam-root   "/org-roam/Work"
+ :pages-directory "pages"
+ :journals-directory "journals")
+```
+
+The two roots hold identically-named `pages/` and `journals/` subtrees, so a
+node's path relative to its root is the same on both sides (1:1 mapping).
+
+**Node tables (internal).**  Each side is read into a hash table keyed by UUID
+(files without a `:id` fall back to a `path:` key).  A table value is
+`(:id UUID :path REL :abs ABS :node IR :hash SHA256 :mtime TIME :title TITLE)`,
+where `:hash` is the file's SHA-256 and `:mtime` its
+`file-attribute-modification-time`.
+
+**Actions.**  The plan is an ordered list of action plists, each carrying
+`:type`, `:id`, and `:reason` plus the fields the executor needs:
+
+| `:type` | meaning | extra fields |
+|---|---|---|
+| `create-roam` / `create-logseq` | new on one side; propagate | `:path`, `:node` |
+| `update-roam` / `update-logseq` | modified on one side; reconvert | `:path`, `:node` |
+| `seed` | present on both, never synced; record baseline | `:path`, `:node` |
+| `rename-roam` / `rename-logseq` | path changed on one side; mirror rename | `:from`, `:to` |
+| `trash-roam` / `trash-logseq` | deleted on one side; move the other copy to trash | `:path`, `:abs` |
+
+`:reason` is one of `new`, `modified`, `newest-wins`, `renamed`, `deleted`,
+`conflict`, or `seed`.
+
+**Classification** (AGENTS.md §7 step 3): new-on-one-side → create; modified
+on one side (hash differs from state) → update the other; modified on both →
+newest file wins (default) or prompt; path changed on one side with identical
+content → rename; deleted on one side with a state record → trash the other.
+A node present on both sides but absent from state is **seeded** (recorded,
+not written) so a first run over an already-paired graph is a no-op.
+
+**Public functions:**
+
+- `logseq-org-sync-reconcile-plan` (graph state) → the plan (pure).
+- `logseq-org-sync-reconcile-dry-run` — alias of `-plan` (Phase 6 uses it).
+- `logseq-org-sync-reconcile-apply` (graph state plan) → updated state
+  (writes files, moves deletions to trash, updates the state store).
+
+**Conflict policy** (AGENTS.md §6):
+
+- `logseq-org-sync-reconcile-conflict-policy` — `newest-wins` (default) or
+  `prompt`.
+- `logseq-org-sync-reconcile-prompt-function` — called for `prompt`; returns
+  `logseq` or `roam`.
+
+**Trash** (AGENTS.md §1.7): `logseq-org-sync-reconcile-trash-directory`
+(default `.trash`); deleted files are moved there (relative path preserved),
+never hard-deleted.
+
+**Known simplification.**  The reconciler hand-writes org-roam files with the
+Phase 3 writer (`logseq-org-sync-roam-write`) rather than org-roam's capture
+path (§9.10).  This keeps the engine and its tests independent of a live
+org-roam database; routing new-node creation through `org-roam-capture-` is
+deferred to the Phase 7 command/UX layer.
+
+### 9.12 Phase 6 module — `logseq-org-sync-safety.el`
+
+The safety & UX layer (AGENTS.md §10 phase 6).  It is a thin wrapper over the
+reconciler: planning, classification, and execution stay in
+`logseq-org-sync-reconcile` so they remain independently testable.
+
+**Public functions:**
+
+- `logseq-org-sync-safety-dry-run-text` (graph state) → a human-readable
+  preview of the plan as a string; computes the plan but never applies it.
+- `logseq-org-sync-safety-apply` (graph state plan) → state; backs up files
+  about to be overwritten, applies the plan, then runs the updated hook.
+- `logseq-org-sync-safety-plan-and-apply` (graph state) → state; the
+  convenience entry point combining plan + safe apply.
+
+**Defcustoms:**
+
+- `logseq-org-sync-updated-hook` — run after an apply with a non-empty plan.
+- `logseq-org-sync-safety-backup-directory` — `.backup` by default.
+- `logseq-org-sync-safety-backup-enabled` — non-nil by default.
+
+**Backup** (AGENTS.md §10 phase 6): before an overwrite, the existing file is
+copied under the graph root's `.backup/` subdirectory (relative path
+preserved).  Deletions are already moved to `.trash/` by the reconciler.  The
+newest-wins/prompt conflict policy lives on the reconciler (§9.11).
 
 ---
 
