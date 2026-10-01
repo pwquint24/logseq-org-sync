@@ -1,69 +1,76 @@
-# Document Title
+# org-roam file format — `.org`
 
-Describe the format of org files used by the package org-roam, and compare them to the org files used by logseq
+This document describes the subset of Org syntax this sync engine reads and
+writes on the org-roam side, and how it compares with the Logseq `.org` and
+`.md` formats (see `LOGSEQ-FORMAT.md`).
 
+## Node model
 
+org-roam (v2) treats a file — or any heading carrying an `:ID:` property — as
+a **node**:
 
+- A **file-level node** is identified by a top-level `:PROPERTIES:` drawer
+  containing `:ID:`.
+- A **heading-level node** is a heading whose own `:PROPERTIES:` drawer contains
+  an `:ID:`.
 
-``` reasoning
-**Defining the Parameters**
+This engine syncs file-level nodes: one Logseq page ↔ one org-roam file.
 
-I've zeroed in on the core request: distinguishing between `org-roam` and `Logseq`'s handling of Org files. My focus is on describing their respective formats. I'm taking on the role of an Emacs-dwelling LLM, ready to break down the nuances.
+## File-level node
 
+```org
+:PROPERTIES:
+:ID:       c7b2a5e4-18c2-4b2a-8c54-1bfa3c678a12
+:ROAM_ALIASES: "Alternative Title" "Other"
+:END:
+#+title: My Concept
+#+filetags: :topic:emacs:
 
-**Analyzing the Features**
+Freeform text, standard paragraphs, and headings.
 
-I'm now comparing the structural nuances of both formats. Specifically, I see `org-roam` favors standard Org-mode with UUID-based IDs for both file-level and heading-level nodes, relying heavily on `:PROPERTIES:` drawers for metadata and using `id:` links. Logseq, however, leans towards an outliner paradigm, treating everything as a block with properties like `key:: value` and `- key:: value`, though it also supports Org-mode conventions.
-
-
-
+* A heading
 ```
 
-### Org-roam File Format
+- **Identity** — `:ID: <uuid>` in the top-level drawer.
+- **Title** — `#+title: Page title`.
+- **Aliases** — `:ROAM_ALIASES: "a" "b"` (each alias double-quoted,
+  space-separated).
+- **Tags** — `#+filetags: :a:b:` (org colon form).
+- **Arbitrary node properties** — other keys in the top-level `:PROPERTIES:`
+  drawer.
 
-Org-roam (v2) treats any standard Org file or subtree as a "node." It relies strictly on standard Org-mode syntax and UUIDs:
+## Headings and links
 
-* **File-level Node Example:**
-  ```org
-  :PROPERTIES:
-  :ID:       c7b2a5e4-18c2-4b2a-8c54-1bfa3c678a12
-  :ROAM_ALIASES: "Alternative Title"
-  :END:
-  #+title: My Concept
-  #+filetags: :topic:emacs:
+- **Headings** are standard Org headlines; the `*` count is document structure,
+  not Logseq block indentation.
+- **ID links** — `[[id:<uuid>][Label]]` are the primary page/heading link form.
+- **Fuzzy links** — `[[Label]]` may still appear for unresolved targets; the
+  sync leaves them alone unless a node is created.
+- **Block references** — `((uuid))` and embeds `{{embed ((uuid))}}` are
+  preserved verbatim by the parse/write module; the reconciler translates them
+  cross-side to `[[id:<uuid>][block text]]` and
+  `[[id:<uuid>][#embed block text]]` (see `AGENTS.md` §6).
 
-  Freeform text, standard paragraphs, and headings.
-  ```
-* **Headline-level Node:** Any heading with a `:PROPERTIES:` drawer containing an `:ID:` property is indexed as an independent node.
-* **Linking:** Primarily uses standard Org ID links: `[[id:uuid][Label]]`.
-* **Structure:** Freeform document model. You write standard Org prose, tables, code blocks, and headings without mandatory list structures.
+## Comparison with Logseq `.org` / `.md`
 
----
+| Concern | org-roam | Logseq `.org` | Logseq Markdown |
+|---|---|---|---|
+| Model | Document-first: prose, headings | Outliner-first: every block is a headline `*` | Outliner-first: every block is an indented list item `-` |
+| Page identity | `:ID:` in top-level drawer | `#+id:` in-buffer setting | `id:: <uuid>` page property |
+| Title | `#+title:` | filename slug; `#+title:` overrides | filename slug; `title::` overrides |
+| Aliases | `:ROAM_ALIASES: "a" "b"` | `#+alias: a, b` | `alias:: a, b` |
+| Page tags | `#+filetags: :a:b:` | `#+tags: a, b` and/or `#+filetags: :a:b:` | `tags:: a, b` |
+| Page links | `[[id:<uuid>][Title]]` | `[[Title]]` | `[[Title]]` / `[Label]([[Title]])` |
+| Block reference | heading `:ID:` + `[[id:<uuid>][block text]]` | `((uuid))` → block's `:id:` | `((uuid))` → block's `id::` |
+| Block embed | heading `:ID:` + `[[id:<uuid>][#embed block text]]` | `{{embed ((uuid))}}` | `{{embed ((uuid))}}` |
+| Block properties | heading `:PROPERTIES:` drawer | heading `:PROPERTIES:` drawer | `key:: value` continuation lines |
+| Page properties | top-level `:PROPERTIES:` drawer | `#+key: value` settings | `key:: value` settings |
 
-### Comparison with Logseq (Org mode)
+## Notes
 
-While Logseq can read and write `.org` files, its internal data model differs significantly from native Emacs Org-mode and Org-roam:
-
-| Feature | Org-roam | Logseq (`.org`) |
-| :--- | :--- | :--- |
-| **Model** | **Document-first:** Arbitrary prose, paragraphs, and headings. | **Outliner-first:** Almost all content is written as nested bullet points (`- `). |
-| **Page Links** | By ID: `[[id:<uuid>][Page Title]]` | By Title: `[[Page Name]]` or `#tag` |
-| **Block Links** | Target ID in heading drawer: `[[id:<uuid>][Heading]]` | UUID in double parens: `((uuid))` |
-| **Properties** | Standard Org drawers: `:PROPERTIES: ... :END:` | Logseq `key:: value` pairs (either page-level at top, or inline below bullets). |
-| **Node Granularity** | Files and headings explicitly tagged with an `:ID:`. | Every single bullet item is an addressable block. |
-| **Database** | Emacsql (SQLite) parses and syncs Org files in the background. | Datalog (in-memory) maintains the graph database. |
-
-### Practical Interoperability
-
-* **Org-roam $\to$ Logseq:** Logseq will parse file titles, but body text not nested under bullets (`- `) is treated as a single monolith block. Org-roam `id:` links won't resolve as native page references in Logseq.
-* **Logseq $\to$ Org-roam:** Logseq files look like deeply nested lists in Emacs. Without `:ID:` properties, Org-roam will not recognize Logseq pages or blocks as nodes until you generate IDs for them.
-
-### 
-
-<!-- Local Variables: -->
-<!-- gptel-model: gemini-flash-latest -->
-<!-- gptel--backend-name: "GeminiSearch" -->
-<!-- gptel--system-message: "You are a large language model living in Emacs and a helpful assistant. Respond concisely." -->
-<!-- gptel--tool-names: nil -->
-<!-- gptel--bounds: ((ignore (135 149) (895 899)) (response (149 895) (901 3140))) -->
-<!-- End: -->
+- org-roam's database (emacsql) and `org-roam-capture-` path are **not** used by
+  this engine; the Phase 3 writer (`logseq-org-sync-roam.el`) hand-writes the
+  files so the sync stays testable without a live org-roam database
+  (`AGENTS.md` §9.11).
+- `#+filetags:` is an org-roam-native keyword; the Logseq side uses
+  `#+tags:`/`#+filetags:` (`LOGSEQ-FORMAT.md` §7).

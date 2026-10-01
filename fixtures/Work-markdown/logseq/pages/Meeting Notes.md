@@ -1,0 +1,5 @@
+id:: 10000000-0000-0000-0000-000000000002
+alias:: Notes
+
+- Summarize decisions from [[Project Alpha]]
+	- Follow up on action items

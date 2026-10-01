@@ -125,5 +125,20 @@ SCHEDULED: <2026-10-01 Thu>
                      (logseq-org-sync-roam-format
                       (logseq-org-sync-roam-parse-file file)))))))
 
+(ert-deftest logseq-org-sync-roam--page-tags ()
+  (let ((text ":PROPERTIES:\n:ID: 10000000-0000-0000-0000-000000000001\n:END:\n#+title: X\n#+filetags: :a:b:\n\n* One\n"))
+    (with-temp-buffer
+      (insert text)
+      (org-mode)
+      (let ((node (logseq-org-sync-roam-parse-buffer "Fallback")))
+        (should (equal '("a" "b") (plist-get node :tags)))))))
+
+(ert-deftest logseq-org-sync-roam--page-tags-round-trip ()
+  (let ((node '(:title "X" :id "10000000-0000-0000-0000-000000000001"
+                :tags ("a" "b"))))
+    (should (equal
+             ":PROPERTIES:\n:ID: 10000000-0000-0000-0000-000000000001\n:END:\n#+title: X\n#+filetags: :a:b:\n"
+             (logseq-org-sync-roam-format node)))))
+
 (provide 'logseq-org-sync-roam-test)
 ;;; logseq-org-sync-roam-test.el ends here

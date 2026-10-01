@@ -6,3 +6,4 @@ tmp/
 site-lisp/
 package-cache/
 og/
+/md-treesit/

@@ -1,9 +1,9 @@
 # Phase 0 fixtures
 
 Minimal, paired fixtures for round-trip tests. Each fixture is a **native**
-representation of the same three notes — one as a Logseq `.org` graph, one as
-an org-roam directory — related by the shared UUID identity described in
-`AGENTS.md` §3–§5.
+representation of the same three notes — one as a Logseq graph (`.org` or
+`.md`), one as an org-roam directory — related by the shared UUID identity
+described in `AGENTS.md` §3–§5.
 
 ## Layout
 
@@ -75,3 +75,45 @@ With no concurrent edits, each note must round-trip to a no-op:
 
 Because both sides share the UUID, `[[Meeting Notes]]` →
 `[[id:…-002][Meeting Notes]]` → `[[Meeting Notes]]` is lossless.
+
+---
+
+## Markdown fixture
+
+`fixtures/Work-markdown/` mirrors the same three notes as a native Logseq
+**Markdown** graph (`pages/*.md`, `journals/*.md`) paired with the same
+org-roam mirror as `Work/`:
+
+```
+fixtures/Work-markdown/
+  logseq/                  ;; native Logseq Markdown graph root
+    config.edn             ;; no active :preferred-format "Org"
+    pages/
+      Project Alpha.md
+      Meeting Notes.md
+    journals/
+      2026-09-30.md
+  org-roam/                ;; same org-roam mirror as Work/
+    pages/
+      Project Alpha.org
+      Meeting Notes.org
+    journals/
+      2026-09-30.org
+```
+
+The mapping is 1:1 on the relative path, with the extension changed on the
+Logseq side:
+
+- `logseq/pages/Project Alpha.md` ↔ `org-roam/pages/Project Alpha.org`
+- `logseq/journals/2026-09-30.md` ↔ `org-roam/journals/2026-09-30.org`
+
+| Concern | Logseq Markdown side | org-roam side |
+|---|---|---|
+| Identity | `id:: <uuid>` | `:ID: <uuid>` |
+| Aliases | `alias:: Alpha, ProjA` | `:ROAM_ALIASES: "Alpha" "ProjA"` |
+| Links | `[[Meeting Notes]]` | `[[id:…-002][Meeting Notes]]` |
+| Structure | indented list items (`-`, `\t-`) | headings (`*`, `**`) |
+| TODO | `TODO` / `DONE` prefix | `TODO` / `DONE` keywords |
+
+The config omits an active `:preferred-format "Org"`, so
+`logseq-org-sync-logseq-graph-format` treats it as Markdown.

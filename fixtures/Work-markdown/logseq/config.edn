@@ -1,0 +1,12 @@
+;; Minimal Logseq configuration for the Markdown sync fixture.
+;;
+;; The absence of an active `:preferred-format "Org"` setting is what makes
+;; the sync engine treat this graph as Markdown (see
+;; `logseq-org-sync-logseq-graph-format').
+
+{:preferred-workflow :todo
+ :pages-directory "pages"
+ :journals-directory "journals"
+ :journal/page-title-format "yyyy-MM-dd"
+ :journal/file-name-format "yyyy-MM-dd"
+ :file/name-format :triple-lowbar}

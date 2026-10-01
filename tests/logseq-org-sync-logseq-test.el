@@ -118,5 +118,122 @@ SCHEDULED: <2026-10-01 Thu>
                      (logseq-org-sync-logseq-format
                       (logseq-org-sync-logseq-parse-file file)))))))
 
+(ert-deftest logseq-org-sync-logseq--page-tags ()
+  (let ((text "#+id: 10000000-0000-0000-0000-000000000001\n#+alias: Alpha\n#+tags: a, b\n#+filetags: :b:c:\n\n* One\n"))
+    (with-temp-buffer
+      (insert text)
+      (org-mode)
+      (let ((node (logseq-org-sync-logseq-parse-buffer "X")))
+        (should (equal '("a" "b" "c") (plist-get node :tags)))
+        (should-not (plist-member node :properties))))))
+
+(ert-deftest logseq-org-sync-logseq--page-tags-round-trip ()
+  (let ((node '(:title "X" :id "10000000-0000-0000-0000-000000000001"
+                :aliases ("Alpha") :tags ("a" "b"))))
+    (should (equal
+             "#+id: 10000000-0000-0000-0000-000000000001\n#+alias: Alpha\n#+tags: a, b\n"
+             (logseq-org-sync-logseq-format node)))))
+
+(defconst logseq-org-sync-logseq-test-markdown-fixtures
+  (expand-file-name "../fixtures/Work-markdown/logseq" logseq-org-sync-logseq-test-dir)
+  "Root of the Phase 0 Markdown Logseq fixture graph.")
+
+(defconst logseq-org-sync-logseq-test-markdown-journal
+  (expand-file-name "journals/2026-09-30.md"
+                    logseq-org-sync-logseq-test-markdown-fixtures))
+
+(defconst logseq-org-sync-logseq-test-markdown-meeting
+  (expand-file-name "pages/Meeting Notes.md"
+                    logseq-org-sync-logseq-test-markdown-fixtures))
+
+(defconst logseq-org-sync-logseq-test-markdown-project
+  (expand-file-name "pages/Project Alpha.md"
+                    logseq-org-sync-logseq-test-markdown-fixtures))
+
+(ert-deftest logseq-org-sync-logseq--graph-format ()
+  (should (eq 'org
+              (logseq-org-sync-logseq-graph-format
+               logseq-org-sync-logseq-test-fixtures)))
+  (should (eq 'markdown
+              (logseq-org-sync-logseq-graph-format
+               logseq-org-sync-logseq-test-markdown-fixtures))))
+
+(ert-deftest logseq-org-sync-logseq--scan-markdown ()
+  (should (equal (logseq-org-sync-logseq-scan
+                  logseq-org-sync-logseq-test-markdown-fixtures)
+                 (list logseq-org-sync-logseq-test-markdown-journal
+                       logseq-org-sync-logseq-test-markdown-meeting
+                       logseq-org-sync-logseq-test-markdown-project))))
+
+(ert-deftest logseq-org-sync-logseq--parse-markdown-project-alpha ()
+  (should (equal
+           (logseq-org-sync-logseq-parse-file
+            logseq-org-sync-logseq-test-markdown-project)
+           '(:title "Project Alpha"
+             :id "10000000-0000-0000-0000-000000000001"
+             :aliases ("Alpha" "ProjA")
+             :content ((:level 1 :todo "TODO" :text "Draft the proposal"
+                        :children ((:level 2 :text "Share with [[Meeting Notes]]")))
+                       (:level 1 :todo "DONE" :text "Ship the first milestone"))
+             :links ((fuzzy "Meeting Notes" nil))))))
+
+(ert-deftest logseq-org-sync-logseq--parse-markdown-meeting-notes ()
+  (should (equal
+           (logseq-org-sync-logseq-parse-file
+            logseq-org-sync-logseq-test-markdown-meeting)
+           '(:title "Meeting Notes"
+             :id "10000000-0000-0000-0000-000000000002"
+             :aliases ("Notes")
+             :content ((:level 1 :text "Summarize decisions from [[Project Alpha]]"
+                        :children ((:level 2 :text "Follow up on action items"))))
+             :links ((fuzzy "Project Alpha" nil))))))
+
+(ert-deftest logseq-org-sync-logseq--parse-markdown-journal ()
+  (should (equal
+           (logseq-org-sync-logseq-parse-file
+            logseq-org-sync-logseq-test-markdown-journal)
+           '(:title "2026-09-30"
+             :id "10000000-0000-0000-0000-000000000003"
+             :content ((:level 1 :text "Review [[Project Alpha]] proposal"
+                        :children ((:level 2 :todo "TODO" :text "Send feedback"))))
+             :links ((fuzzy "Project Alpha" nil))))))
+
+(ert-deftest logseq-org-sync-logseq--markdown-round-trip ()
+  (dolist (file (logseq-org-sync-logseq-scan
+                 logseq-org-sync-logseq-test-markdown-fixtures))
+    (let ((expected (with-temp-buffer
+                      (insert-file-contents file)
+                      (buffer-string))))
+      (should (equal expected
+                     (logseq-org-sync-logseq-markdown-format
+                      (logseq-org-sync-logseq-parse-file file)))))))
+
+(ert-deftest logseq-org-sync-logseq--markdown-heading-round-trip ()
+  (let ((text "# Heading 1\ncollapsed:: true\n\t- ## Heading 2\n\t\t- ### Heading 3\n"))
+    (with-temp-buffer
+      (insert text)
+      (let ((node (logseq-org-sync-logseq-markdown-parse-buffer "Page")))
+        (should (equal
+                 '(:level 1 :text "Heading 1"
+                   :properties (("heading" . "1") ("collapsed" . "true"))
+                   :children ((:level 2 :text "Heading 2"
+                               :properties (("heading" . "2"))
+                               :children ((:level 3 :text "Heading 3"
+                                           :properties (("heading" . "3")))))))
+                 (car (plist-get node :content))))))))
+
+(ert-deftest logseq-org-sync-logseq--markdown-multiple-children ()
+  (let ((text "- Parent\n\t- Child A\n\t- Child B\n- Sibling\n"))
+    (with-temp-buffer
+      (insert text)
+      (let ((node (logseq-org-sync-logseq-markdown-parse-buffer "Page")))
+        (should (equal
+                 '(:title "Page"
+                   :content ((:level 1 :text "Parent"
+                              :children ((:level 2 :text "Child A")
+                                         (:level 2 :text "Child B")))
+                             (:level 1 :text "Sibling")))
+                 node))))))
+
 (provide 'logseq-org-sync-logseq-test)
 ;;; logseq-org-sync-logseq-test.el ends here

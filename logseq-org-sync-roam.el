@@ -36,6 +36,7 @@
 ;;     :<other>: value         ;; arbitrary node properties, optional
 ;;     :END:
 ;;     #+title: Page title
+;;     #+filetags: :a:b:       ;; page tags (org colon form)
 ;;
 ;;     * TODO block text [[id:<uuid>][Page]]
 ;;     ** child text
@@ -46,11 +47,13 @@
 ;; ## Intermediate representation (IR)
 ;;
 ;; The node and block plists are exactly those documented in
-;; `logseq-org-sync-logseq.el' §Intermediate representation, with two
+;; `logseq-org-sync-logseq.el' §Intermediate representation, with these
 ;; org-roam-side differences:
 ;;
 ;; - `:title' is read from the `#+title:' keyword (falling back to the file
 ;;   name base) rather than derived from the file name base alone.
+;; - `:tags' is read from and written as the `#+filetags:' keyword (org colon
+;;   form `:a:b:') rather than Logseq's `#+tags:'/`#+filetags:' mix.
 ;; - `:links' contains `(id UUID DESCRIPTION)' tuples for
 ;;   `[[id:UUID][DESCRIPTION]]' links as well as `(fuzzy TARGET DESCRIPTION)'
 ;;   tuples for unresolved `[[TARGET]]' links.
@@ -62,9 +65,13 @@
 ;; - Links are preserved verbatim in `:text'; the `:links' field is a semantic
 ;;   extraction for the reconciler (Phase 5), not the source of link output.
 ;; - Block references `((uuid))' and embeds `{{embed ((uuid))}}' are preserved
-;;   verbatim in `:text' (deferred; see AGENTS.md §6).
+;;   verbatim in `:text' by this parse/write module; the reconciler translates
+;;   them cross-side (see AGENTS.md §6).
 ;; - Fuzzy-link collection skips org-internal links (`[[#custom-id]]',
 ;;   `[[*heading]]'); image/asset links are not specially handled (deferred).
+;; - Headline body content (paragraphs, `#+BEGIN_*' blocks, tables) is dropped;
+;;   only the first line, TODO, tags, properties, planning, and child headlines
+;;   round-trip.
 
 ;;; Code:
 
@@ -108,6 +115,18 @@ DATA is an `org-data' parse tree."
                                         "TITLE")))
                         (org-element-contents section))))
     (when kw (org-element-property :value kw))))
+
+(defun logseq-org-sync-roam--first-section-filetags (section)
+  "Return SECTION's `#+filetags:' value split into a tag list, or nil.
+The value uses org's colon form (`:a:b:')."
+  (let ((kw (cl-find-if (lambda (element)
+                          (and (eq (org-element-type element) 'keyword)
+                               (string= (org-element-property :key element)
+                                        "FILETAGS")))
+                        (org-element-contents section))))
+    (when kw
+      (delete-dups (split-string (org-element-property :value kw)
+                                 ":" t "\\s-*")))))
 
 (defun logseq-org-sync-roam--block-properties (headline)
   "Return HEADLINE's own block properties as an alist of (KEY . VALUE).
@@ -183,23 +202,25 @@ TITLE is the fallback title used when the buffer has no `#+title:'."
          (node (list :title (or title
                                 (file-name-base (or buffer-file-name ""))))))
     (when section
-      (let ((title-value (logseq-org-sync-roam--first-section-title section)))
+      (let ((title-value (logseq-org-sync-roam--first-section-title section))
+            (tags (logseq-org-sync-roam--first-section-filetags section))
+            (drawer (logseq-org-sync-roam--first-section-drawer section))
+            (id nil) (aliases nil) (props nil))
         (when title-value
-          (setq node (plist-put node :title title-value))))
-      (let ((drawer (logseq-org-sync-roam--first-section-drawer section)))
+          (setq node (plist-put node :title title-value)))
         (when drawer
-          (let ((id nil) (aliases nil) (props nil))
-            (dolist (np (org-element-map drawer 'node-property #'identity))
-              (let ((key (org-element-property :key np))
-                    (value (org-element-property :value np)))
-                (cond
-                 ((string= key "ID") (setq id value))
-                 ((string= key "ROAM_ALIASES")
-                  (setq aliases (split-string-and-unquote value)))
-                 (t (push (cons key value) props)))))
-            (when id (setq node (plist-put node :id id)))
-            (when aliases (setq node (plist-put node :aliases aliases)))
-            (when props (setq node (plist-put node :properties (nreverse props))))))))
+          (dolist (np (org-element-map drawer 'node-property #'identity))
+            (let ((key (org-element-property :key np))
+                  (value (org-element-property :value np)))
+              (cond
+               ((string= key "ID") (setq id value))
+               ((string= key "ROAM_ALIASES")
+                (setq aliases (split-string-and-unquote value)))
+               (t (push (cons key value) props))))))
+        (when id (setq node (plist-put node :id id)))
+        (when aliases (setq node (plist-put node :aliases aliases)))
+        (when tags (setq node (plist-put node :tags tags)))
+        (when props (setq node (plist-put node :properties (nreverse props))))))
     (let ((blocks (mapcar #'logseq-org-sync-roam--parse-block
                           (cl-remove-if-not
                            (lambda (element)
@@ -253,7 +274,8 @@ The fallback node `:title' is derived from FILE's name base."
     (when props
       (setq lines (append lines (list ":PROPERTIES:")))
       (dolist (prop props)
-        (setq lines (append lines (list (concat ":" (car prop) ": " (cdr prop))))))
+        (let ((key (if (member (car prop) '("id" "ID")) "ID" (car prop))))
+          (setq lines (append lines (list (concat ":" key ": " (cdr prop)))))))
       (setq lines (append lines (list ":END:"))))
     (dolist (child children)
       (setq lines (append lines (logseq-org-sync-roam--format-block child))))
@@ -262,6 +284,10 @@ The fallback node `:title' is derived from FILE's name base."
 (defun logseq-org-sync-roam--format-aliases (aliases)
   "Format ALIASES (a list of strings) as a `:ROAM_ALIASES:' value."
   (mapconcat (lambda (alias) (format "\"%s\"" alias)) aliases " "))
+
+(defun logseq-org-sync-roam--format-filetags (tags)
+  "Format TAGS (a list of strings) as a `#+filetags:' value."
+  (concat ":" (mapconcat #'identity tags ":") ":"))
 
 ;;;###autoload
 (defun logseq-org-sync-roam-format (node)
@@ -280,9 +306,13 @@ The fallback node `:title' is derived from FILE's name base."
         (dolist (prop props)
           (push (concat ":" (car prop) ": " (cdr prop)) lines))
         (push ":END:" lines)))
-    ;; Title keyword.
+    ;; Title and filetags keywords.
     (let ((title (plist-get node :title)))
       (when title (push (concat "#+title: " title) lines)))
+    (let ((tags (plist-get node :tags)))
+      (when tags
+        (push (concat "#+filetags: "
+                      (logseq-org-sync-roam--format-filetags tags)) lines)))
     (setq lines (nreverse lines))
     ;; Blocks, separated from the first section by a blank line when both exist.
     (let ((content nil))
