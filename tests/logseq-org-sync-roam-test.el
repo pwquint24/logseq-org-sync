@@ -33,7 +33,7 @@
   "Directory containing this test file.")
 
 (defconst logseq-org-sync-roam-test-fixtures
-  (expand-file-name "fixtures/Work/org-roam" logseq-org-sync-roam-test-dir)
+  (expand-file-name "../fixtures/Work/org-roam" logseq-org-sync-roam-test-dir)
   "Root of the Phase 0 org-roam fixture graph.")
 
 (defconst logseq-org-sync-roam-test-journal

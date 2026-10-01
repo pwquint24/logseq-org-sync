@@ -12,43 +12,43 @@ done on the other side.
 
 The directory currently contains:
 
-- `logseq-org-roam.el` — an existing, one-way (Logseq → org-roam) converter by
-  Sylvain Bougerel. It operates on a *single shared* directory. §9 documents
-  its architecture in detail. Phase 1 split it into the `logseq-org-roam-*.el`
-  modules below; `logseq-org-roam.el` is now the aggregator + command entry
-  point (see §9.7).
-- `logseq-org-roam-core.el`, `logseq-org-roam-parser.el`,
-  `logseq-org-roam-inventory.el`, `logseq-org-roam-dict.el`,
-  `logseq-org-roam-updater.el`, `logseq-org-roam-create.el` — the Phase 1
-  module split of `logseq-org-roam.el` (see §9.7).
-- `bug-fix.el` — a bugfix for that package (fixes stale link offsets on the
-  re-parse pass). The fix is now folded into `logseq-org-roam-parser.el`
-  (§9.5). It also carries unrelated personal config (gptel + Doom leader-key
-  bindings) that is out of scope for this project.
-- `logseq-org-roam-test.el` — the ERT test suite for the package (uses the
-  `mocker` library; the top-level `logseq-org-roam` command is untested).
+- `legacy/` — the pre-existing one-way (Logseq → org-roam) converter by
+  Sylvain Bougerel, moved into a subdirectory during tidying. §9 documents
+  its architecture. Its files are:
+  - `legacy/logseq-org-roam.el` — the aggregator + command entry point
+    (see §9.7).
+  - `legacy/logseq-org-roam-core.el`, `legacy/logseq-org-roam-parser.el`,
+    `legacy/logseq-org-roam-inventory.el`, `legacy/logseq-org-roam-dict.el`,
+    `legacy/logseq-org-roam-updater.el`, `legacy/logseq-org-roam-create.el` —
+    the Phase 1 module split of `logseq-org-roam.el` (see §9.7).
+  - `legacy/bug-fix.el` — a bugfix for that package (fixes stale link offsets
+    on the re-parse pass). The fix is now folded into `logseq-org-roam-parser.el`
+    (§9.5). It also carries unrelated personal config (gptel + Doom leader-key
+    bindings) that is out of scope for this project.
+  - `legacy/logseq-org-roam-test.el` — the legacy ERT test suite (uses the
+    `mocker` library; the top-level `logseq-org-roam` command is untested).
+  - `legacy/README.md` — the legacy package README.
 - `logseq-org-sync-logseq.el` — the Phase 2 Logseq-side scanner/parser/writer
   (`logseq .org ↔ IR`; see §9.8).
-- `logseq-org-sync-logseq-test.el` — the ERT test suite for it (scanner,
-  parser, and round-trip tests over the `fixtures/Work/logseq` graph).
 - `logseq-org-sync-roam.el` — the Phase 3 org-roam-side scanner/parser/writer
   (`org-roam .org ↔ IR`; see §9.9).
-- `logseq-org-sync-roam-test.el` — the ERT test suite for it (scanner,
-  parser, and round-trip tests over the `fixtures/Work/org-roam` graph).
 - `logseq-org-sync-identity.el` — the Phase 4 node identity (UUID) assignment
   (see §9.10); uses `org-id-new`.
-- `logseq-org-sync-identity-test.el` — the ERT test suite for it.
 - `logseq-org-sync-state.el` — the Phase 4 metadata state store (load/save of
   last-synced paths/hashes/mtimes; see §9.10).
-- `logseq-org-sync-state-test.el` — the ERT test suite for it.
 - `logseq-org-sync-reconcile.el` — the Phase 5 reconciler (scan both sides,
   classify by UUID, produce/apply an action plan; see §9.11).
-- `logseq-org-sync-reconcile-test.el` — the ERT test suite for it (seed,
-  create/update, newest-wins, rename, delete/trash, dry-run, convergence).
 - `logseq-org-sync-safety.el` — the Phase 6 safety & UX layer (dry-run
   preview, pre-overwrite backup, updated hook; see §9.12).
-- `logseq-org-sync-safety-test.el` — the ERT test suite for it (dry-run
-  rendering, backup on/off, conflict prompt, updated hook).
+- `tests/` — ERT test suites for the sync engine:
+  - `tests/logseq-org-sync-logseq-test.el` (scanner, parser, round-trip).
+  - `tests/logseq-org-sync-roam-test.el` (scanner, parser, round-trip).
+  - `tests/logseq-org-sync-identity-test.el`.
+  - `tests/logseq-org-sync-state-test.el`.
+  - `tests/logseq-org-sync-reconcile-test.el` (seed, create/update,
+    newest-wins, rename, delete/trash, dry-run, convergence).
+  - `tests/logseq-org-sync-safety-test.el` (dry-run, backup, conflict prompt,
+    updated hook).
 - `Logseq-Demo-Graph-main/` — the upstream Logseq demo graph (`.md`; **not a
   usable fixture** — the supported Logseq format is `.org`).
 - `Logseq-demo-graph-org/` — a `.org` demo graph (`pages/`, `journals/`,
@@ -63,7 +63,7 @@ The directory currently contains:
   (`Work/logseq/` native Logseq `.org` graph and `Work/org-roam/` mirror) plus
   `fixtures/README.md` documenting the mapping, UUID legend, and round-trip
   contract.
-- `README.md`, `Makefile`, `LICENSE`.
+- `Makefile`, `LICENSE`.
 
 ---
 
@@ -313,6 +313,10 @@ together.
 ---
 
 ## 9. Reuse of existing code
+
+The legacy `logseq-org-roam` converter (§9.1–§9.7) now lives in the
+`legacy/` subdirectory; the two-way sync engine (§9.8–§9.12) lives at the
+repository root and in `tests/`.
 
 The following existing `logseq-org-roam.el` logic is reused for the
 `logseq → roam` half and the "read org-roam" half:

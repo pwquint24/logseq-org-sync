@@ -35,7 +35,7 @@
   "Directory containing this test file.")
 
 (defconst logseq-org-sync-safety-test-fixtures
-  (expand-file-name "fixtures/Work" logseq-org-sync-safety-test-dir)
+  (expand-file-name "../fixtures/Work" logseq-org-sync-safety-test-dir)
   "Root of the Phase 0 paired `Work' fixtures.")
 
 (defun logseq-org-sync-safety-test--setup ()
