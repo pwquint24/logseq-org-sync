@@ -69,9 +69,9 @@
 ;;   them cross-side (see AGENTS.md §6).
 ;; - Fuzzy-link collection skips org-internal links (`[[#custom-id]]',
 ;;   `[[*heading]]'); image/asset links are not specially handled (deferred).
-;; - Headline body content (paragraphs, `#+BEGIN_*' blocks, tables) is dropped;
-;;   only the first line, TODO, tags, properties, planning, and child headlines
-;;   round-trip.
+;; - Headline body content (paragraphs, `#+BEGIN_*' blocks, tables) is parsed
+;;   into the block's `:body' field, but the writers do not yet emit it; body
+;;   content does not round-trip until the writer step lands.
 
 ;;; Code:
 
@@ -143,6 +143,34 @@ child headlines' drawers are ignored."
                 props))
         (nreverse props)))))
 
+(defun logseq-org-sync-roam--block-body (headline)
+  "Return HEADLINE's own body text, or nil when empty.
+The body is the headline's section contents minus its planning line and
+`:PROPERTIES:' drawer, trimmed of surrounding whitespace."
+  (let ((section (cl-find-if (lambda (element)
+                               (eq (org-element-type element) 'section))
+                             (org-element-contents headline))))
+    (when section
+      (let* ((begin (or (org-element-property :contents-begin section)
+                        (org-element-property :begin section)))
+             (end (or (org-element-property :contents-end section)
+                      (org-element-property :end section)))
+             (boundaries
+              (cl-remove-if-not
+               (lambda (element)
+                 (memq (org-element-type element) '(planning property-drawer)))
+               (org-element-contents section)))
+             (body-begin
+              (or (and boundaries
+                       (apply #'max
+                              (mapcar (lambda (element)
+                                        (org-element-property :end element))
+                                      boundaries)))
+                  begin)))
+        (let ((body (buffer-substring-no-properties body-begin end)))
+          (setq body (string-trim body))
+          (and (not (string-empty-p body)) body))))))
+
 (defun logseq-org-sync-roam--parse-block (headline)
   "Parse HEADLINE (an org-element) into a block plist."
   (let* ((level (org-element-property :level headline))
@@ -150,6 +178,7 @@ child headlines' drawers are ignored."
          (text (org-element-property :raw-value headline))
          (tags (org-element-property :tags headline))
          (props (logseq-org-sync-roam--block-properties headline))
+         (body (logseq-org-sync-roam--block-body headline))
          (scheduled (let ((s (org-element-property :scheduled headline)))
                       (when s (org-element-property :raw-value s))))
          (deadline (let ((d (org-element-property :deadline headline)))
@@ -166,6 +195,7 @@ child headlines' drawers are ignored."
     (when props (setq block (plist-put block :properties props)))
     (when scheduled (setq block (plist-put block :scheduled scheduled)))
     (when deadline (setq block (plist-put block :deadline deadline)))
+    (when body (setq block (plist-put block :body body)))
     (when children (setq block (plist-put block :children children)))
     block))
 

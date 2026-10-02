@@ -173,8 +173,10 @@ From `logseq.graph-parser.property`:
 - **Block refs/embeds**: the parse/write module preserves `((uuid))` and
   `{{embed ((uuid))}}` verbatim; the reconciler translates them cross-side
   (see `AGENTS.md` §6).
-- **Block body**: only a headline's first line round-trips; free text, tables,
-  and `#+BEGIN_*` blocks under a heading are dropped (the IR is headline-only).
+- **Block body**: free text, tables, and `#+BEGIN_*` blocks under a heading are
+  parsed into the block's `:body` field, but the writers do not yet emit it;
+  body content does not round-trip until the writer step lands (`AGENTS.md`
+  §11.1).
 - **mldoc org support is a subset of Org**, so constructs outside the
   `og/deps/graph-parser/src/logseq/graph_parser/schema/mldoc.cljc` AST are not
   guaranteed to round-trip through Logseq even if Emacs can parse them.
@@ -263,8 +265,8 @@ reconciler (see `AGENTS.md` §6).
 ### 6. Sync scope / limitations
 
 - Only the first line of a block, its TODO marker, its `key:: value` block
-  properties, and `SCHEDULED:`/`DEADLINE:` lines round-trip through the IR.
-  Tables, code fences, and other multi-line block bodies are dropped (matching
-  the org parser's headline-only scope).
+  properties, and `SCHEDULED:`/`DEADLINE:` lines round-trip through the IR
+  today.  Tables, code fences, and other multi-line block bodies are parsed
+  into `:body` but not yet emitted by the writers (`AGENTS.md` §11.1).
 - Markdown block tags (`#tag`) are preserved verbatim in block text; they are
   not translated into the IR `:tags` field.

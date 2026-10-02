@@ -251,7 +251,7 @@ To make translation testable and symmetric, both sides read/write a common IR:
       :properties (...)
       :content (ordered list of blocks
                 (block :level N :text "..." :todo ... :scheduled ... :deadline ...
-                       :properties (...) :children (...)))
+                       :properties (...) :body "..." :children (...)))
       :links (list of (kind target description)))
 ```
 
@@ -271,6 +271,7 @@ Translation table:
 | Links | `[[Title]]` | `[[Title]]` / `[desc]([[Title]])` | `:links` | `[[id:uuid][Title]]` |
 | Block refs | `((uuid))` / `{{embed ((uuid))}}` | `((uuid))` / `{{embed ((uuid))}}` | block `:text` (translated at sync) | `[[id:uuid][block text]]` / `[[id:uuid][#embed block text]]` |
 | Structure | headlines (outliner) | indented list items (outliner) | `:content` blocks | headings/document |
+| Block body | section body | indented continuation lines | `:body` (string; planned §11.1) | section body; Markdown tables wrap in `#+BEGIN_SRC markdown` (§11.2) |
 | TODO | org TODO keywords (`TODO`/`DOING`/`DONE`) | `TODO`/`DOING`/`DONE`/… prefix | `:todo` | org TODO keywords |
 | Dates | `SCHEDULED:`/`DEADLINE:` | `SCHEDULED:`/`DEADLINE:` | `:scheduled`/`:deadline` | org timestamps |
 
@@ -542,6 +543,8 @@ A block is a plist with deterministic key order (nil keys omitted):
 - `:tags` — list of strings, or omitted.
 - `:properties` — alist from the block's own `:PROPERTIES:` drawer, or omitted.
 - `:scheduled` / `:deadline` — raw timestamp strings, or omitted.
+- `:body` — string (block body text between the first line and child blocks,
+  with planning/properties excluded), or omitted.
 - `:children` — list of nested block plists, or omitted.
 
 **Public functions:** `logseq-org-sync-logseq-scan` (sorted absolute `.org` or
@@ -561,11 +564,12 @@ A block is a plist with deterministic key order (nil keys omitted):
   cross-side (see §6).
 - Fuzzy-link collection skips org-internal links (`[[#custom-id]]`,
   `[[*heading]]`); image/asset links are not specially handled (deferred, §11).
-- Block bodies beyond the first line are dropped in both the `.org` and
-  Markdown parsers (tables, code fences, multi-line text).  The IR is
-  headline-shaped: a block keeps its first line (`:text`), TODO marker,
-  `:tags`, block `:properties`, and `SCHEDULED:`/`DEADLINE:` lines — not its
-  body.
+- Block bodies beyond the first line (tables, code fences, multi-line text)
+  are parsed into the block's `:body` field by both the `.org` and Markdown
+  parsers, but the writers do not yet emit `:body` (step 4 in §11.1).  A
+  block keeps its first line (`:text`), TODO marker, `:tags`, block
+  `:properties`, `SCHEDULED:`/`DEADLINE:` lines, and `:body`; round-tripping
+  body content is pending the writer step.
 - Markdown block tags (`#tag`) are preserved verbatim in `:text` rather than
   translated into the IR `:tags` field; org headline tags (`:tag:`) are parsed
   into `:tags` normally.
@@ -850,8 +854,10 @@ scope below.
   Logseq-only, local asset links (e.g. `../assets/foo.png`) are broken on the
   org-roam side; v1 assumes no local assets or out-of-band asset sync.
 - Block bodies beyond the first line (tables, code fences, multi-line text)
-  are not carried into the IR by either parser, and Markdown block tags
-  (`#tag`) are not translated into `:tags`; see §9.8, planned in §11.1.
+  are parsed into `:body` but the writers do not yet emit it, and Markdown
+  block tags (`#tag`) are not translated into `:tags`; see §9.8, planned in
+  §11.1 (Markdown tables round-trip as verbatim `#+BEGIN_SRC markdown`
+  blocks, §11.2).
 - Live/continuous sync: Phase 7 provides an `after-save-hook` and
   `file-notify` watchers; richer or more robust continuous operation (e.g.
   finer-grained watch filtering, queueing) remains a future concern.
@@ -864,6 +870,9 @@ raw text; see `og/deps/graph-parser/src/logseq/graph_parser/block.cljs`
 engine's own simplification, not Logseq's.  The plan is to add an optional
 `:body` string to the block plist and teach each parser/writer to round-trip
 it.
+
+Steps 1–3 (the IR schema plus both parser sides) are implemented; steps 4–7
+(the writers, round-trip verification, and remaining doc sweep) remain.
 
 Steps:
 
@@ -889,17 +898,75 @@ Steps:
 5. **Same-format round-trips first.** Verify byte-for-byte round-trips for
    `org ↔ org` and `markdown ↔ markdown` (extend the existing round-trip
    tests), since these reuse each side's native body syntax.
-6. **Cross-format is a later, lossy step.** `markdown ↔ org` body translation
-   (fenced code/tables ↔ `#+BEGIN_SRC`/org tables) is explicitly deferred; in
-   the first cut a body crossing formats is carried verbatim and documented as
-   un-translated, or dropped on the foreign side.
+6. **Cross-format.** Fenced code blocks translate natively
+   (` ```lang ` … ` ``` ` ↔ `#+BEGIN_SRC lang` … `#+END_SRC`).  Markdown pipe
+   tables are **not** translated to org tables; instead they are wrapped
+   verbatim in a `#+BEGIN_SRC markdown` … `#+END_SRC` block on the org-roam
+   side (§11.2).  Other `markdown ↔ org` body constructs (blockquotes,
+   `#+BEGIN_*` blocks) remain deferred: such a body crossing formats is
+   carried verbatim and documented as un-translated, or dropped on the
+   foreign side.
 7. **Update docs** (`AGENTS.md` §5 IR table, §9.8/§9.9/§9.11,
    `LOGSEQ-FORMAT.md`, `ORG-ROAM-FORMAT`) and mark this item done once steps
    1–5 land.
 
 Open decisions to resolve during implementation:
 
-- exact `:body` canonicalization (trailing newlines, indentation) so that
-  parse → write is idempotent;
+- `:body` canonicalization: both sides store raw body text with surrounding
+  whitespace trimmed — the org parsers take the section body minus its
+  planning line and `:PROPERTIES:` drawer, `string-trim`med; the Markdown
+  parser de-indents continuation lines to the block's content level and drops
+  trailing blank lines.  Writer idempotence (step 4) must reproduce this.
 - whether `:body` stores raw text only, or a future structured AST (mirroring
   Logseq's `:block/body` vs `:block/content` split) is added later.
+
+### 11.2 Decided — Markdown tables wrap in a `#+BEGIN_SRC markdown` block
+
+Cross-format block bodies do **not** translate Markdown pipe tables into
+native org tables.  A Markdown pipe table crossing from a Markdown-format
+Logseq graph into its org-roam mirror is carried **verbatim** inside a
+`#+BEGIN_SRC markdown` … `#+END_SRC` block.  Rationale: GFM and org tables
+disagree on alignment storage (delimiter-row colons vs. org's auto-detected
+`<l>`/`<c>`/`<r>` cookies), escaped pipes (`\|`) have no clean org-table
+equivalent, and cell text would otherwise require per-cell inline translation.
+The wrapper keeps the table byte-for-byte lossless and the round-trip
+self-describing.
+
+**Scope.** Markdown-graph ↔ org-roam only.  Logseq `.org` graphs and org-roam
+both already use native org tables, so no wrapping happens there.
+
+**Round-trip contract.**
+
+- `logseq markdown → roam`: a block whose content is a pipe table (its first
+  line and/or `:body` lines are `| … |` rows) is written with the full table
+  text — header, any delimiter row, and data rows — verbatim inside
+  `#+BEGIN_SRC markdown` … `#+END_SRC`, de-indented to the source block's
+  content level.
+- `roam → logseq markdown`: a `#+BEGIN_SRC markdown` block whose entire
+  contents are a pipe table is unwrapped back to raw pipe-table lines,
+  re-indented under the block with the block's continuation indent.
+
+**Recognition (no extra metadata).** A `#+BEGIN_SRC markdown` block is a
+wrapped table iff its contents are a Markdown pipe table: a header row
+(`| … |`), an optional delimiter row (`|---|`, with optional `:` alignment
+colons), and zero or more data rows — every non-blank line beginning and
+ending with `|`.  A genuine Markdown source block whose sample text is itself
+a valid pipe table is indistinguishable and round-trips back as a native
+table on the Logseq side; this is an accepted, documented edge case.
+
+**IR.** No structured table node is added.  A table travels inside the
+block's `:body` string (§11.1): the Markdown parser/writer handles table rows
+as body lines, and the org-roam parser/writer wraps/unwraps the
+`#+BEGIN_SRC markdown` block.
+
+**Assumptions / open details.**
+
+- First cut assumes a table occupies its block's body (the common Logseq
+  case); mixed paragraph+table content in one block is out of scope until
+  `:body` can represent structured regions.
+- Logseq frequently stores a table's header row as the block's first line
+  (`:text`) with the remaining rows as continuation lines; the Markdown parser
+  must recognize a `| … |` first line as a table row and join it with the
+  `:body` rows before wrapping.
+- The canonical wrapped form preserves the delimiter row and alignment colons
+  exactly; neither side normalizes the table text.

@@ -109,6 +109,33 @@ SCHEDULED: <2026-10-01 Thu>
                      (logseq-org-sync-logseq-format
                       (logseq-org-sync-logseq-parse-buffer "X")))))))
 
+(ert-deftest logseq-org-sync-logseq--parse-block-body ()
+  (let ((text "* TODO Draft
+SCHEDULED: <2026-10-01 Thu>
+:PROPERTIES:
+:ID: abc
+:END:
+A body paragraph.
+
+| a | b |
+|---+---|
+| 1 | 2 |
+"))
+    (with-temp-buffer
+      (insert text)
+      (org-mode)
+      (let ((block (car (plist-get
+                         (logseq-org-sync-logseq-parse-buffer "X")
+                         :content))))
+        (should (equal "A body paragraph.
+
+| a | b |
+|---+---|
+| 1 | 2 |"
+                       (plist-get block :body)))
+        (should (equal "<2026-10-01 Thu>" (plist-get block :scheduled)))
+        (should (equal '(("ID" . "abc")) (plist-get block :properties)))))))
+
 (ert-deftest logseq-org-sync-logseq--round-trip ()
   (dolist (file (logseq-org-sync-logseq-scan logseq-org-sync-logseq-test-fixtures))
     (let ((expected (with-temp-buffer
@@ -234,6 +261,58 @@ SCHEDULED: <2026-10-01 Thu>
                                          (:level 2 :text "Child B")))
                              (:level 1 :text "Sibling")))
                  node))))))
+
+(ert-deftest logseq-org-sync-logseq--markdown-body ()
+  (let ((text "- Block\n  body line one\n  body line two\n\t- child\n"))
+    (with-temp-buffer
+      (insert text)
+      (should (equal
+               '(:title "Page"
+                 :content ((:level 1 :text "Block"
+                            :body "body line one\nbody line two"
+                            :children ((:level 2 :text "child")))))
+               (logseq-org-sync-logseq-markdown-parse-buffer "Page"))))))
+
+(ert-deftest logseq-org-sync-logseq--markdown-body-properties ()
+  (let ((text "- TODO Block\n  key:: value\n  some body\n"))
+    (with-temp-buffer
+      (insert text)
+      (should (equal
+               '(:title "Page"
+                 :content ((:level 1 :todo "TODO" :text "Block"
+                            :properties (("key" . "value"))
+                            :body "some body")))
+               (logseq-org-sync-logseq-markdown-parse-buffer "Page"))))))
+
+(ert-deftest logseq-org-sync-logseq--markdown-body-fence ()
+  (let ((text "- ```\n  (println \"hi\")\n  ```\n"))
+    (with-temp-buffer
+      (insert text)
+      (should (equal
+               '(:title "Page"
+                 :content ((:level 1 :text "```"
+                            :body "(println \"hi\")\n```")))
+               (logseq-org-sync-logseq-markdown-parse-buffer "Page"))))))
+
+(ert-deftest logseq-org-sync-logseq--markdown-body-table ()
+  (let ((text "- | a | b |\n  |---|---|\n  | 1 | 2 |\n"))
+    (with-temp-buffer
+      (insert text)
+      (should (equal
+               '(:title "Page"
+                 :content ((:level 1 :text "| a | b |"
+                            :body "|---|---|\n| 1 | 2 |")))
+               (logseq-org-sync-logseq-markdown-parse-buffer "Page"))))))
+
+(ert-deftest logseq-org-sync-logseq--markdown-body-blank-line ()
+  (let ((text "- Block\n  line one\n  \n  line three\n"))
+    (with-temp-buffer
+      (insert text)
+      (should (equal
+               '(:title "Page"
+                 :content ((:level 1 :text "Block"
+                            :body "line one\n\nline three")))
+               (logseq-org-sync-logseq-markdown-parse-buffer "Page"))))))
 
 (provide 'logseq-org-sync-logseq-test)
 ;;; logseq-org-sync-logseq-test.el ends here

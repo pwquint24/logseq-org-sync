@@ -97,9 +97,9 @@
 ;;   them cross-side (see AGENTS.md §6).
 ;; - Fuzzy-link collection skips org-internal links (`[[#custom-id]]',
 ;;   `[[*heading]]'); image/asset links are not specially handled (deferred).
-;; - Headline body content (paragraphs, `#+BEGIN_*' blocks, tables) is dropped;
-;;   only the first line, TODO, tags, properties, planning, and child headlines
-;;   round-trip.
+;; - Headline body content (paragraphs, `#+BEGIN_*' blocks, tables) is parsed
+;;   into the block's `:body' field, but the writers do not yet emit it; body
+;;   content does not round-trip until the writer step lands.
 ;;
 ;; ## Canonical Logseq Markdown format
 ;;
@@ -199,6 +199,34 @@ child headlines' drawers are ignored."
                 props))
         (nreverse props)))))
 
+(defun logseq-org-sync-logseq--block-body (headline)
+  "Return HEADLINE's own body text, or nil when empty.
+The body is the headline's section contents minus its planning line and
+`:PROPERTIES:' drawer, trimmed of surrounding whitespace."
+  (let ((section (cl-find-if (lambda (element)
+                               (eq (org-element-type element) 'section))
+                             (org-element-contents headline))))
+    (when section
+      (let* ((begin (or (org-element-property :contents-begin section)
+                        (org-element-property :begin section)))
+             (end (or (org-element-property :contents-end section)
+                      (org-element-property :end section)))
+             (boundaries
+              (cl-remove-if-not
+               (lambda (element)
+                 (memq (org-element-type element) '(planning property-drawer)))
+               (org-element-contents section)))
+             (body-begin
+              (or (and boundaries
+                       (apply #'max
+                              (mapcar (lambda (element)
+                                        (org-element-property :end element))
+                                      boundaries)))
+                  begin)))
+        (let ((body (buffer-substring-no-properties body-begin end)))
+          (setq body (string-trim body))
+          (and (not (string-empty-p body)) body))))))
+
 (defun logseq-org-sync-logseq--parse-block (headline)
   "Parse HEADLINE (an org-element) into a block plist."
   (let* ((level (org-element-property :level headline))
@@ -206,6 +234,7 @@ child headlines' drawers are ignored."
          (text (org-element-property :raw-value headline))
          (tags (org-element-property :tags headline))
          (props (logseq-org-sync-logseq--block-properties headline))
+         (body (logseq-org-sync-logseq--block-body headline))
          (scheduled (let ((s (org-element-property :scheduled headline)))
                       (when s (org-element-property :raw-value s))))
          (deadline (let ((d (org-element-property :deadline headline)))
@@ -222,6 +251,7 @@ child headlines' drawers are ignored."
     (when props (setq block (plist-put block :properties props)))
     (when scheduled (setq block (plist-put block :scheduled scheduled)))
     (when deadline (setq block (plist-put block :deadline deadline)))
+    (when body (setq block (plist-put block :body body)))
     (when children (setq block (plist-put block :children children)))
     block))
 
@@ -489,8 +519,8 @@ nil, and TEXT is the block text with markers removed."
 
 (defun logseq-org-sync-logseq-markdown--parse-continuation (block line)
   "Merge continuation LINE into BLOCK and return the updated block.
-Recognizes `SCHEDULED:', `DEADLINE:', and `key:: value' block properties;
-other continuation content is ignored (matching the .org parser's scope)."
+Recognizes `SCHEDULED:', `DEADLINE:', and `key:: value' block properties.
+Body lines are handled separately by `--collect-blocks'."
   (let ((trimmed (string-trim-left line)))
     (cond
      ((string-match "\\`SCHEDULED:[ \t]*\\(.*\\)\\'" trimmed)
@@ -507,10 +537,35 @@ other continuation content is ignored (matching the .org parser's scope)."
      (t nil))
     block))
 
+(defun logseq-org-sync-logseq-markdown--continuation-line-p (line)
+  "Return non-nil when LINE is a recognized block continuation.
+Recognized continuations are `SCHEDULED:', `DEADLINE:', and `key:: value'
+block-property lines; everything else is body content."
+  (let ((trimmed (string-trim-left line)))
+    (or (string-match-p "\\`SCHEDULED:[ \t]*\\(.*\\)\\'" trimmed)
+        (string-match-p "\\`DEADLINE:[ \t]*\\(.*\\)\\'" trimmed)
+        (logseq-org-sync-logseq-markdown--property-line-p trimmed))))
+
+(defun logseq-org-sync-logseq-markdown--separator-line-p (line cindent)
+  "Return non-nil when LINE separates blocks instead of continuing one.
+A blank line is a separator unless it carries the continuation indent
+CINDENT, in which case it is a blank line inside a block's body."
+  (and (string-blank-p (string-trim line))
+       (not (string-prefix-p cindent line))))
+
+(defun logseq-org-sync-logseq-markdown--deindent (line cindent)
+  "Remove the continuation indent CINDENT from LINE.
+Falls back to stripping leading whitespace when LINE does not begin with
+CINDENT."
+  (if (string-prefix-p cindent line)
+      (substring line (length cindent))
+    (string-trim-left line)))
+
 (defun logseq-org-sync-logseq-markdown--collect-blocks (lines unit)
   "Return a flat list of block plists (no `:children') from LINES.
 UNIT is the indentation unit returned by
-`logseq-org-sync-logseq-markdown--indent-unit'."
+`logseq-org-sync-logseq-markdown--indent-unit'.  Unrecognized indented
+continuation lines are collected as the block's `:body'."
   (let ((blocks nil))
     (while lines
       (let ((line (car lines)))
@@ -522,14 +577,29 @@ UNIT is the indentation unit returned by
                  (level (logseq-org-sync-logseq-markdown--block-level line unit))
                  (block (logseq-org-sync-logseq-markdown--make-block
                          level (nth 0 parsed) (nth 1 parsed) (nth 2 parsed)))
-                 (rest (cdr lines)))
+                 (rest (cdr lines))
+                 (cindent
+                  (concat (logseq-org-sync-logseq-markdown--leading-whitespace line)
+                          "  "))
+                 (body-lines nil))
             (while (and rest
-                        (not (string-blank-p (string-trim (car rest))))
                         (not (logseq-org-sync-logseq-markdown--block-line-p
-                              (car rest))))
-              (setq block (logseq-org-sync-logseq-markdown--parse-continuation
-                           block (car rest)))
+                              (car rest)))
+                        (not (logseq-org-sync-logseq-markdown--separator-line-p
+                              (car rest) cindent)))
+              (let ((raw (car rest)))
+                (if (logseq-org-sync-logseq-markdown--continuation-line-p raw)
+                    (setq block (logseq-org-sync-logseq-markdown--parse-continuation
+                                 block raw))
+                  (push (logseq-org-sync-logseq-markdown--deindent raw cindent)
+                        body-lines)))
               (setq rest (cdr rest)))
+            (setq body-lines (nreverse body-lines))
+            (while (and body-lines (string-empty-p (car (last body-lines))))
+              (setq body-lines (butlast body-lines)))
+            (when body-lines
+              (setq block (plist-put block :body
+                                     (mapconcat #'identity body-lines "\n"))))
             (push block blocks)
             (setq lines rest)))
          (t (setq lines (cdr lines))))))

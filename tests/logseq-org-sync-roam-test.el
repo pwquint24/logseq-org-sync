@@ -116,6 +116,23 @@ SCHEDULED: <2026-10-01 Thu>
                      (logseq-org-sync-roam-format
                       (logseq-org-sync-roam-parse-buffer "X")))))))
 
+(ert-deftest logseq-org-sync-roam--parse-block-body ()
+  (let ((text "* TODO Draft
+SCHEDULED: <2026-10-01 Thu>
+:PROPERTIES:
+:ID: abc
+:END:
+A body paragraph.
+"))
+    (with-temp-buffer
+      (insert text)
+      (org-mode)
+      (let ((block (car (plist-get (logseq-org-sync-roam-parse-buffer "X")
+                                   :content))))
+        (should (equal "A body paragraph." (plist-get block :body)))
+        (should (equal "<2026-10-01 Thu>" (plist-get block :scheduled)))
+        (should (equal '(("ID" . "abc")) (plist-get block :properties)))))))
+
 (ert-deftest logseq-org-sync-roam--round-trip ()
   (dolist (file (logseq-org-sync-roam-scan logseq-org-sync-roam-test-fixtures))
     (let ((expected (with-temp-buffer
