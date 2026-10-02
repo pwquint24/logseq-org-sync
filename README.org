@@ -354,10 +354,26 @@ layer.
 * Related documentation
 
 - [[file:AGENTS.md][AGENTS.md]] — architecture, IR, sync algorithm, phases, deferred work.
-- [[file:LOGSEQ-FORMAT.md][LOGSEQ-FORMAT.md]] — the Logseq =.org= / =.md= format reference.
-- [[file:ORG-ROAM-FORMAT][ORG-ROAM-FORMAT]] — the org-roam =.org= format reference.
-- [[file:STATE-CACHE.md][STATE-CACHE.md]] — the state cache in detail.
+- [[file:LOGSEQ-FORMAT.org][LOGSEQ-FORMAT.org]] — the Logseq =.org= / =.md= format reference.
+- [[file:ORG-ROAM-FORMAT.org][ORG-ROAM-FORMAT.org]] — the org-roam =.org= format reference.
+- [[file:STATE-CACHE.org][STATE-CACHE.org]] — the state cache in detail.
 - [[file:fixtures/README.md][fixtures/README.md]] — the paired fixture contract.
+
+* Acknowledgments
+
+This project builds upon and references prior work in the Emacs and Logseq
+communities:
+
+- *Legacy converter* — Sylvain Bougerel's
+  [[https://github.com/sbougerel/logseq-org-roam][logseq-org-roam]] provided the
+  initial one-way (Logseq → org-roam) converter, inventory design, and link
+  detection logic.  The original package and its test suite are preserved under
+  =legacy/= for reference and historical lineage.
+- *Logseq demo graphs* — The reference Markdown demo graph under
+  =Logseq-Demo-Graph-main/= is from candideu's
+  [[https://github.com/candideu/Logseq-Demo-Graph][Logseq-Demo-Graph]], and the
+  paired Org graph under =Logseq-demo-graph-org/= serves as reference material
+  for Logseq's native Org mode representation.
 
 * License
 
