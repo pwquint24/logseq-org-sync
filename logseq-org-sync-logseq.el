@@ -98,8 +98,8 @@
 ;; - Fuzzy-link collection skips org-internal links (`[[#custom-id]]',
 ;;   `[[*heading]]'); image/asset links are not specially handled (deferred).
 ;; - Headline body content (paragraphs, `#+BEGIN_*' blocks, tables) is parsed
-;;   into the block's `:body' field, but the writers do not yet emit it; body
-;;   content does not round-trip until the writer step lands.
+;;   into the block's `:body' field and round-trips same-format; cross-format
+;;   body translation is still deferred (AGENTS.md §11.1/§11.2).
 ;;
 ;; ## Canonical Logseq Markdown format
 ;;
@@ -357,6 +357,7 @@ the Markdown parser; everything else uses the .org parser."
          (scheduled (plist-get block :scheduled))
          (deadline (plist-get block :deadline))
          (children (plist-get block :children))
+         (body (plist-get block :body))
          (lines (list (logseq-org-sync-logseq--format-headline
                        level todo text tags))))
     (cond
@@ -371,6 +372,8 @@ the Markdown parser; everything else uses the .org parser."
       (dolist (prop props)
         (setq lines (append lines (list (concat ":" (car prop) ": " (cdr prop))))))
       (setq lines (append lines (list ":END:"))))
+    (when body
+      (setq lines (append lines (split-string body "\n"))))
     (dolist (child children)
       (setq lines (append lines (logseq-org-sync-logseq--format-block child))))
     lines))
@@ -808,6 +811,7 @@ The fallback node `:title' is derived from FILE's name base."
          (scheduled (plist-get block :scheduled))
          (deadline (plist-get block :deadline))
          (children (plist-get block :children))
+         (body (plist-get block :body))
          (cindent (logseq-org-sync-logseq-markdown--continuation-indent level))
          (lines (list (logseq-org-sync-logseq-markdown--block-line
                        level todo text heading))))
@@ -818,6 +822,10 @@ The fallback node `:title' is derived from FILE's name base."
     (dolist (prop props)
       (let ((key (if (member (car prop) '("id" "ID")) "id" (car prop))))
         (setq lines (append lines (list (concat cindent key ":: " (cdr prop)))))))
+    (when body
+      (setq lines (append lines
+                          (mapcar (lambda (line) (concat cindent line))
+                                  (split-string body "\n")))))
     (dolist (child children)
       (setq lines (append lines (logseq-org-sync-logseq-markdown--format-block child))))
     lines))

@@ -565,11 +565,11 @@ A block is a plist with deterministic key order (nil keys omitted):
 - Fuzzy-link collection skips org-internal links (`[[#custom-id]]`,
   `[[*heading]]`); image/asset links are not specially handled (deferred, §11).
 - Block bodies beyond the first line (tables, code fences, multi-line text)
-  are parsed into the block's `:body` field by both the `.org` and Markdown
-  parsers, but the writers do not yet emit `:body` (step 4 in §11.1).  A
-  block keeps its first line (`:text`), TODO marker, `:tags`, block
-  `:properties`, `SCHEDULED:`/`DEADLINE:` lines, and `:body`; round-tripping
-  body content is pending the writer step.
+  round-trip same-format through the block's `:body` field (`.org ↔ .org` and
+  Markdown ↔ Markdown); cross-format body translation is still deferred
+  (§11.1/§11.2).  A block keeps its first line (`:text`), TODO marker,
+  `:tags`, block `:properties`, `SCHEDULED:`/`DEADLINE:` lines, `:body`, and
+  `:children`.
 - Markdown block tags (`#tag`) are preserved verbatim in `:text` rather than
   translated into the IR `:tags` field; org headline tags (`:tag:`) are parsed
   into `:tags` normally.
@@ -854,10 +854,10 @@ scope below.
   Logseq-only, local asset links (e.g. `../assets/foo.png`) are broken on the
   org-roam side; v1 assumes no local assets or out-of-band asset sync.
 - Block bodies beyond the first line (tables, code fences, multi-line text)
-  are parsed into `:body` but the writers do not yet emit it, and Markdown
-  block tags (`#tag`) are not translated into `:tags`; see §9.8, planned in
-  §11.1 (Markdown tables round-trip as verbatim `#+BEGIN_SRC markdown`
-  blocks, §11.2).
+  round-trip same-format through `:body`, but cross-format body translation
+  is still deferred; Markdown block tags (`#tag`) are not translated into
+  `:tags`.  See §9.8, §11.1, and §11.2 (Markdown tables round-trip as
+  verbatim `#+BEGIN_SRC markdown` blocks).
 - Live/continuous sync: Phase 7 provides an `after-save-hook` and
   `file-notify` watchers; richer or more robust continuous operation (e.g.
   finer-grained watch filtering, queueing) remains a future concern.
@@ -871,8 +871,9 @@ engine's own simplification, not Logseq's.  The plan is to add an optional
 `:body` string to the block plist and teach each parser/writer to round-trip
 it.
 
-Steps 1–3 (the IR schema plus both parser sides) are implemented; steps 4–7
-(the writers, round-trip verification, and remaining doc sweep) remain.
+Steps 1–5 (the IR schema, both parser sides, the writers, and same-format
+round-trip tests) are implemented; steps 6–7 (cross-format body translation
+and the remaining doc sweep) remain.
 
 Steps:
 

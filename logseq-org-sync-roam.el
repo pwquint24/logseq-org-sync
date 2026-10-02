@@ -70,8 +70,8 @@
 ;; - Fuzzy-link collection skips org-internal links (`[[#custom-id]]',
 ;;   `[[*heading]]'); image/asset links are not specially handled (deferred).
 ;; - Headline body content (paragraphs, `#+BEGIN_*' blocks, tables) is parsed
-;;   into the block's `:body' field, but the writers do not yet emit it; body
-;;   content does not round-trip until the writer step lands.
+;;   into the block's `:body' field and round-trips same-format; cross-format
+;;   body translation is still deferred (AGENTS.md §11.1/§11.2).
 
 ;;; Code:
 
@@ -292,6 +292,7 @@ The fallback node `:title' is derived from FILE's name base."
          (scheduled (plist-get block :scheduled))
          (deadline (plist-get block :deadline))
          (children (plist-get block :children))
+         (body (plist-get block :body))
          (lines (list (logseq-org-sync-roam--format-headline
                        level todo text tags))))
     (cond
@@ -307,6 +308,8 @@ The fallback node `:title' is derived from FILE's name base."
         (let ((key (if (member (car prop) '("id" "ID")) "ID" (car prop))))
           (setq lines (append lines (list (concat ":" key ": " (cdr prop)))))))
       (setq lines (append lines (list ":END:"))))
+    (when body
+      (setq lines (append lines (split-string body "\n"))))
     (dolist (child children)
       (setq lines (append lines (logseq-org-sync-roam--format-block child))))
     lines))

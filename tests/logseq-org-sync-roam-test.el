@@ -133,6 +133,27 @@ A body paragraph.
         (should (equal "<2026-10-01 Thu>" (plist-get block :scheduled)))
         (should (equal '(("ID" . "abc")) (plist-get block :properties)))))))
 
+(ert-deftest logseq-org-sync-roam--body-round-trip ()
+  (let ((text "#+title: X
+
+* Paragraph body
+This is a multi-line paragraph body.
+* Table body
+| Syntax | Description |
+|--------+-------------|
+| org    | native table |
+* Code body
+#+BEGIN_SRC elisp
+(+ 1 2)
+#+END_SRC
+"))
+    (with-temp-buffer
+      (insert text)
+      (org-mode)
+      (should (equal text
+                     (logseq-org-sync-roam-format
+                      (logseq-org-sync-roam-parse-buffer "X")))))))
+
 (ert-deftest logseq-org-sync-roam--round-trip ()
   (dolist (file (logseq-org-sync-roam-scan logseq-org-sync-roam-test-fixtures))
     (let ((expected (with-temp-buffer

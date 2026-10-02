@@ -136,6 +136,36 @@ A body paragraph.
         (should (equal "<2026-10-01 Thu>" (plist-get block :scheduled)))
         (should (equal '(("ID" . "abc")) (plist-get block :properties)))))))
 
+(ert-deftest logseq-org-sync-logseq--body-round-trip ()
+  (let ((text "* Paragraph body
+This is a multi-line paragraph body.
+
+It continues on a second line.
+* Table body
+| Syntax | Description |
+|--------+-------------|
+| org    | native table |
+* Code body
+#+BEGIN_SRC elisp
+(+ 1 2)
+(message \"hello\")
+#+END_SRC
+* Org alert body
+#+BEGIN_TIP
+This is a tip body.
+#+END_TIP
+* Quote body
+#+BEGIN_QUOTE
+A quoted body line.
+#+END_QUOTE
+"))
+    (with-temp-buffer
+      (insert text)
+      (org-mode)
+      (should (equal text
+                     (logseq-org-sync-logseq-format
+                      (logseq-org-sync-logseq-parse-buffer "X")))))))
+
 (ert-deftest logseq-org-sync-logseq--round-trip ()
   (dolist (file (logseq-org-sync-logseq-scan logseq-org-sync-logseq-test-fixtures))
     (let ((expected (with-temp-buffer
@@ -313,6 +343,42 @@ A body paragraph.
                  :content ((:level 1 :text "Block"
                             :body "line one\n\nline three")))
                (logseq-org-sync-logseq-markdown-parse-buffer "Page"))))))
+
+(ert-deftest logseq-org-sync-logseq--markdown-body-round-trip ()
+  (let ((text "- Paragraph body
+  This is a multi-line paragraph body.
+  It continues on a second line.
+- | Syntax | Description |
+  | markdown | pipe table |
+  | org | org table |
+- ```elisp
+  (+ 1 2)
+  (message \"hello\")
+  ```
+- #+BEGIN_TIP
+  This is a tip body.
+  #+END_TIP
+- #+BEGIN_QUOTE
+  A quoted body line.
+  #+END_QUOTE
+"))
+    (with-temp-buffer
+      (insert text)
+      (should (equal text
+                     (logseq-org-sync-logseq-markdown-format
+                      (logseq-org-sync-logseq-markdown-parse-buffer "Page")))))))
+
+(ert-deftest logseq-org-sync-logseq--markdown-body-blank-line-round-trip ()
+  (let ((text "- Block
+  line one
+  
+  line three
+"))
+    (with-temp-buffer
+      (insert text)
+      (should (equal text
+                     (logseq-org-sync-logseq-markdown-format
+                      (logseq-org-sync-logseq-markdown-parse-buffer "Page")))))))
 
 (provide 'logseq-org-sync-logseq-test)
 ;;; logseq-org-sync-logseq-test.el ends here
