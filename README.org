@@ -6,8 +6,8 @@
 either side propagate to the other without clobbering concurrent work, and
 every note keeps one stable identity on both sides.
 
-The full architecture is in [[file:AGENTS.md][AGENTS.md]]; the on-disk formats are in
-[[file:LOGSEQ-FORMAT.org][LOGSEQ-FORMAT.org]] and [[file:ORG-ROAM-FORMAT.org][ORG-ROAM-FORMAT.org]].
+The full architecture is in AGENTS.md; the on-disk formats are in
+LOGSEQ-FORMAT.org and ORG-ROAM-FORMAT.org.
 
 * TL;DR
 
@@ -352,11 +352,11 @@ layer.
 
 * Related documentation
 
-- [[file:AGENTS.md][AGENTS.md]] — architecture, IR, sync algorithm, phases, deferred work.
-- [[file:LOGSEQ-FORMAT.org][LOGSEQ-FORMAT.org]] — the Logseq =.org= / =.md= format reference.
-- [[file:ORG-ROAM-FORMAT.org][ORG-ROAM-FORMAT.org]] — the org-roam =.org= format reference.
-- [[file:STATE-CACHE.org][STATE-CACHE.org]] — the state cache in detail.
-- [[file:fixtures/README.md][fixtures/README.md]] — the paired fixture contract.
+- AGENTS.md— architecture, IR, sync algorithm, phases, deferred work.
+- LOGSEQ-FORMAT.org— the Logseq =.org= / =.md= format reference.
+- ORG-ROAM-FORMAT.org — the org-roam =.org= format reference.
+- STATE-CACHE.org — the state cache in detail.
+- fixtures/README.md — the paired fixture contract.
 
 * Acknowledgments
 
@@ -374,6 +374,3 @@ communities:
   paired Org graph under =Logseq-demo-graph-org/= serves as reference material
   for Logseq's native Org mode representation.
 
-* License
-
-See [[file:LICENSE][LICENSE]].
