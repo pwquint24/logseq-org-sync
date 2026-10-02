@@ -1,6 +1,5 @@
 #+TITLE: logseq-org-sync
 #+AUTHOR: Peter Quint
-#+OPTIONS: toc:nil num:nil
 
 * logseq-org-sync is a two-way sync between a [[https://logseq.com][Logseq]] graph (=.org= or
 =.md=) and an [[https://www.orgroam.com][org-roam]] directory, written in Emacs Lisp.  Changes made on
