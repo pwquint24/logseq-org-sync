@@ -1,54 +1,54 @@
-#+title: logseq-org-sync
-#+author: logseq-org-sync authors
-#+options: toc:2 num:t
+#+TITLE: logseq-org-sync
+#+AUTHOR: Peter Quint
+#+OPTIONS: toc:nil num:nil
 
-*logseq-org-sync* is a two-way sync between a [[https://logseq.com][Logseq]] graph (`.org` or
-`.md`) and an [[https://www.orgroam.com][org-roam]] directory, written in Emacs Lisp.  Changes made on
+* logseq-org-sync is a two-way sync between a [[https://logseq.com][Logseq]] graph (=.org= or
+=.md=) and an [[https://www.orgroam.com][org-roam]] directory, written in Emacs Lisp.  Changes made on
 either side propagate to the other without clobbering concurrent work, and
 every note keeps one stable identity on both sides.
 
 The full architecture is in [[file:AGENTS.md][AGENTS.md]]; the on-disk formats are in
-[[file:LOGSEQ-FORMAT.md][LOGSEQ-FORMAT.md]] and [[file:ORG-ROAM-FORMAT][ORG-ROAM-FORMAT]].
+[[file:LOGSEQ-FORMAT.org][LOGSEQ-FORMAT.org]] and [[file:ORG-ROAM-FORMAT.org][ORG-ROAM-FORMAT.org]].
 
 * TL;DR
 
-1. Put the repository on your ~load-path~, then:
+1. Put the repository on your =load-path=, then:
 
-   #+begin_src elisp
-     (add-to-list 'load-path "/path/to/logseq-org-sync")
-     (require 'logseq-org-sync)
-   #+end_src
+#+BEGIN_SRC emacs-lisp
+  (add-to-list 'load-path "/path/to/logseq-org-sync")
+  (require 'logseq-org-sync)
+#+END_SRC
 
 2. Add a graph by picking its Logseq folder:
 
-   #+begin_src elisp
-     M-x logseq-org-sync-add-graph
-   #+end_src
+#+BEGIN_SRC emacs-lisp
+  M-x logseq-org-sync-add-graph
+#+END_SRC
 
    This derives the graph name from the folder basename and mirrors it into
-   ~<logseq-org-sync-roam-directory>/<name>~.  ~logseq-org-sync-roam-directory~
+   =<logseq-org-sync-roam-directory>/<name>=.  ~logseq-org-sync-roam-directory~
    defaults to ~org-roam-directory~ when org-roam is loaded.
 
 3. Sync it:
 
-   #+begin_src elisp
-     M-x logseq-org-sync            ;; pick a graph, preview, confirm
-     M-x logseq-org-sync-here       ;; sync the graph of the current buffer
-     M-x logseq-org-sync-all        ;; sync every configured graph
-   #+end_src
+#+BEGIN_SRC emacs-lisp
+  M-x logseq-org-sync            ;; pick a graph, preview, confirm
+  M-x logseq-org-sync-here       ;; sync the graph of the current buffer
+  M-x logseq-org-sync-all        ;; sync every configured graph
+#+END_SRC
 
 4. (Optional) sync automatically on save:
 
-   #+begin_src elisp
-     (add-hook 'after-save-hook #'logseq-org-sync-after-save)
-   #+end_src
+#+BEGIN_SRC emacs-lisp
+  (add-hook 'after-save-hook #'logseq-org-sync-after-save)
+#+END_SRC
 
    and watch for changes made by the Logseq app:
 
-   #+begin_src elisp
-     M-x logseq-org-sync-watch      ;; choose a graph
-     M-x logseq-org-sync-unwatch    ;; stop
-   #+end_src
+#+BEGIN_SRC emacs-lisp
+  M-x logseq-org-sync-watch      ;; choose a graph
+  M-x logseq-org-sync-unwatch    ;; stop
+#+END_SRC
 
 The rest of this document explains what actually happens, what the state cache
 is for, and the setup gotchas to watch out for.
@@ -68,39 +68,39 @@ is for, and the setup gotchas to watch out for.
 Graphs live in the ~logseq-org-sync-graphs~ user option.  Each entry only needs
 a name and a Logseq folder; the org-roam mirror directory is derived.
 
-#+begin_src elisp
+#+BEGIN_SRC emacs-lisp
   (setq logseq-org-sync-roam-directory "~/org-roam")
 
   (setq logseq-org-sync-graphs
         '((:name "Work"     :logseq-root "~/graphs/Work")
           (:name "Personal" :logseq-root "~/graphs/Personal")))
-#+end_src
+#+END_SRC
 
 With the configuration above:
 
-- ~~/graphs/Work~ mirrors into =~/org-roam/Work=
-- ~~/graphs/Personal~ mirrors into =~/org-roam/Personal=
+- =~/graphs/Work= mirrors into =~/org-roam/Work=
+- =~/graphs/Personal= mirrors into =~/org-roam/Personal=
 
 Each mirror contains the same =pages/= and =journals/= subtrees as its Logseq
 graph.  The mapping is 1:1 on the relative path within a graph; for a Markdown
-graph only the extension changes (~.md~ on the Logseq side, ~.org~ on the
+graph only the extension changes (=.md= on the Logseq side, =.org= on the
 org-roam side).
 
 *Per-graph keys* (all optional except ~:name~ and ~:logseq-root~):
 
-| Key                    | Default                                            |
-|------------------------+----------------------------------------------------|
-| ~:roam-root~           | ~<logseq-org-sync-roam-directory>/<name>~          |
-| ~:pages-directory~     | =pages=                                             |
-| ~:journals-directory~  | =journals=                                          |
-| ~:state-file~          | ~<logseq-org-sync-state-directory>/<name>.plist~    |
+| Key                   | Default                                         |
+|-----------------------+-------------------------------------------------|
+| ~:roam-root~          | =<logseq-org-sync-roam-directory>/<name>=       |
+| ~:pages-directory~    | =pages=                                         |
+| ~:journals-directory~ | =journals=                                      |
+| ~:state-file~         | =<logseq-org-sync-state-directory>/<name>.plist= |
 
 *Format detection*
 
-The Logseq format is read from ~<logseq-root>/logseq/config.edn~ (falling back
-to ~<logseq-root>/config.edn~).  If ~:preferred-format "Org"~ is active the
-graph uses ~.org~ files; otherwise it uses ~.md~.  The org-roam side is always
-~.org~.
+The Logseq format is read from =<logseq-root>/logseq/config.edn= (falling back
+to =<logseq-root>/config.edn=).  If =:preferred-format= is set to ="Org"=, the
+graph uses =.org= files; otherwise it uses =.md=.  The org-roam side is always
+=.org=.
 
 * Commands
 
@@ -127,7 +127,7 @@ which side the buffer is on.
 Both sides read into a common *intermediate representation* (IR) and write from
 it.  This makes translation symmetric and testable:
 
-#+begin_src elisp
+#+BEGIN_SRC emacs-lisp
   (node :id "uuid"
         :title "Foo"
         :aliases ("a" "b")
@@ -138,7 +138,7 @@ it.  This makes translation symmetric and testable:
                    :body "body text"
                    :children (...)))
         :links ((fuzzy "Title" nil)))
-#+end_src
+#+END_SRC
 
 A *node* is one note (page/journal).  A *block* is one Logseq block / one
 org-roam heading.  The parsers turn files into IR; the writers turn IR back
@@ -147,20 +147,20 @@ translates links and block references for the target side.
 
 * Element translation
 
-| Concern        | Logseq =.org=            | Logseq Markdown          | org-roam =.org=                  |
-|----------------+--------------------------+--------------------------+----------------------------------|
-| Identity       | =#+id: <uuid>=           | =id:: <uuid>=            | =:ID: <uuid>=                    |
-| Title          | filename; =#+title:=     | filename; =title::=      | =#+title:=                       |
-| Aliases        | =#+alias: a, b=          | =alias:: a, b=           | =:ROAM_ALIASES: "a" "b"=         |
-| Page tags      | =#+tags:= / =#+filetags:=| =tags:: a, b=            | =#+filetags: :a:b:=              |
-| Block tags     | heading =:tag:=          | =#tag= / =#[[multi-word]]= | heading =:tag:=                |
-| Page link      | =[[Title]]=              | =[[Title]]= / =[t]([[Title]])= | =[[id:uuid][Title]]=       |
-| Block ref      | =((uuid))=               | =((uuid))=               | =[[id:uuid][block text]]=        |
-| Block embed    | ={{embed ((uuid))}}=     | ={{embed ((uuid))}}=     | =[[id:uuid][#embed block text]]= |
-| Structure      | headlines                | indented list items      | headings / document              |
-| TODO           | Org TODO keywords        | =TODO=/=DOING=/=DONE=…    | Org TODO keywords                |
-| Dates          | =SCHEDULED:= /=DEADLINE:=| =SCHEDULED:= /=DEADLINE:=| org timestamps                   |
-| Block body     | section body             | indented continuation     | section body                     |
+| Concern        | Logseq =.org=              | Logseq Markdown            | org-roam =.org=                  |
+|----------------+----------------------------+----------------------------+----------------------------------|
+| Identity       | =#+id: <uuid>=             | =id:: <uuid>=              | =:ID: <uuid>=                    |
+| Title          | filename; =#+title:=       | filename; =title::=        | =#+title:=                       |
+| Aliases        | =#+alias: a, b=            | =alias:: a, b=             | =:ROAM_ALIASES:= ~"a" "b"~       |
+| Page tags      | =#+tags:= / =#+filetags:=  | =tags:: a, b=              | =#+filetags: :a:b:=              |
+| Block tags     | heading =:tag:=            | =#tag= / =#[[multi-word]]= | heading =:tag:=                  |
+| Page link      | =[[Title]]=                | =[[Title]]= / =[t]([[Title]])= | =[[id:uuid][Title]]=         |
+| Block ref      | =((uuid))=                 | =((uuid))=                 | =[[id:uuid][block text]]=        |
+| Block embed    | ={{embed ((uuid))}}=       | ={{embed ((uuid))}}=       | =[[id:uuid][#embed block text]]= |
+| Structure      | headlines                  | indented list items        | headings / document              |
+| TODO           | Org TODO keywords          | =TODO=/=DOING=/=DONE=…      | Org TODO keywords                |
+| Dates          | =SCHEDULED:= / =DEADLINE:= | =SCHEDULED:= / =DEADLINE:= | org timestamps                   |
+| Block body     | section body               | indented continuation      | section body                     |
 
 *Identity*
 
@@ -202,25 +202,25 @@ Block bodies (paragraphs, tables, code fences, quotes) round-trip byte-for-byte
 *within the same format* (=.org ↔ .org= and Markdown ↔ Markdown).  Across
 formats, two constructs are translated:
 
-- Fenced code blocks ↔ =#+BEGIN_SRC=:
+- Fenced code blocks ↔ Org source blocks:
 
-  #+begin_example
-    ```elisp                      #+BEGIN_SRC elisp
-    (+ 1 2)          <->          (+ 1 2)
-    ```                           #+END_SRC
-  #+end_example
+#+BEGIN_EXAMPLE
+  ```elisp                      #+begin_src elisp
+  (+ 1 2)          <->          (+ 1 2)
+  ```                           #+end_src
+#+END_EXAMPLE
 
 - Markdown pipe tables are *not* converted to org tables.  They are wrapped
   verbatim in a =#+BEGIN_SRC markdown= block on the org-roam side, and
   unwrapped back on the Logseq side:
 
-  #+begin_example
-    | Syntax | Description |      #+BEGIN_SRC markdown
-    |--------|-------------|      | Syntax | Description |
-    | md     | pipe table  |  <-> |--------|-------------|
-                                 | md     | pipe table  |
-                                 #+END_SRC
-  #+end_example
+#+BEGIN_EXAMPLE
+  | Syntax | Description |      #+begin_src markdown
+  |--------|-------------|      | Syntax | Description |
+  | md     | pipe table  |  <-> |--------|-------------|
+                                | md     | pipe table  |
+                                #+end_src
+#+END_EXAMPLE
 
 Other body constructs (blockquotes, =#+BEGIN_*= blocks) cross formats verbatim
 and are not structurally translated.
