@@ -574,27 +574,181 @@ REGISTRY maps block UUIDs to their text."
    node (lambda (text)
           (logseq-org-sync-reconcile--translate-roam-text text registry))))
 
-(defun logseq-org-sync-reconcile--translate-plan (plan logseq roam)
-  "Translate block references in PLAN's nodes for their target side.
+;;; ---------------------------------------------------------------------------
+;;; Cross-format block bodies (AGENTS.md §11.1 step 6, §11.2)
+;;; ---------------------------------------------------------------------------
+
+(defun logseq-org-sync-reconcile--md-fence-language (text)
+  "Return Markdown fence TEXT's info string, or nil when TEXT is not a fence.
+An empty string means a fence with no info string."
+  (when (and text
+             (string-match "\\`\\(`\\{3\\}\\)\\([^`]*\\)\\'" text))
+    (string-trim (match-string 2 text))))
+
+(defun logseq-org-sync-reconcile--md-body-content (body)
+  "Return BODY with a trailing Markdown closing fence line removed.
+Returns nil for a nil BODY."
+  (when body
+    (let ((lines (split-string body "\n")))
+      (if (and lines
+               (string-match-p "\\`[ \t]*`\\{3\\}[ \t]*\\'" (car (last lines))))
+          (let ((stripped (mapconcat #'identity (butlast lines) "\n")))
+            (and (not (string-empty-p stripped)) stripped))
+        body))))
+
+(defun logseq-org-sync-reconcile--md-pipe-row-p (line)
+  "Return non-nil when LINE is a Markdown pipe-table row."
+  (string-match-p "\\`|.*|\\'" (string-trim line)))
+
+(defun logseq-org-sync-reconcile--md-pipe-table-p (text)
+  "Return non-nil when TEXT is a Markdown pipe table.
+Every non-blank line must begin and end with `|'."
+  (and text (not (string-empty-p text))
+       (let ((ok t) (lines (split-string text "\n")))
+         (dolist (line lines)
+           (unless (or (string-blank-p (string-trim line))
+                       (logseq-org-sync-reconcile--md-pipe-row-p line))
+             (setq ok nil)))
+         ok)))
+
+(defun logseq-org-sync-reconcile--src-block (body)
+  "Return (LANG . CONTENT) when BODY is a single `#+BEGIN_SRC' block.
+Returns nil otherwise."
+  (when (and body
+             (string-match
+              "\\`#\\+BEGIN_SRC\\([ \t]+\\([^ \t\n]+\\)\\)?[^\n]*\n" body))
+    (let* ((lang (or (match-string 2 body) ""))
+           (content-start (match-end 0))
+           (content-end (and (string-match "\n#\\+END_SRC[ \t]*\\'" body)
+                             (match-beginning 0))))
+      (when content-end
+        (cons lang (if (>= content-start content-end)
+                       ""
+                     (substring body content-start content-end)))))))
+
+(defun logseq-org-sync-reconcile--set-body (block body)
+  "Return BLOCK with `:body' BODY, or without `:body' when BODY is empty."
+  (if (and body (not (string-empty-p body)))
+      (plist-put block :body body)
+    (let ((result nil) (rest block))
+      (while rest
+        (unless (eq (car rest) :body)
+          (setq result (plist-put result (car rest) (cadr rest))))
+        (setq rest (cddr rest)))
+      result)))
+
+(defun logseq-org-sync-reconcile--md-block-to-roam (block)
+  "Translate a Logseq Markdown BLOCK into an org-roam block.
+A fenced code block (whose `:text' is a ``````` opener) becomes a
+`#+BEGIN_SRC' body; a pipe table (whose full content is `| … |' rows) is
+wrapped verbatim in `#+BEGIN_SRC markdown' (§11.2).  Other blocks are
+returned unchanged."
+  (let* ((text (plist-get block :text))
+         (body (plist-get block :body))
+         (lang (logseq-org-sync-reconcile--md-fence-language text)))
+    (cond
+     (lang
+      (let* ((src-lang (if (string-empty-p lang) "" (concat " " lang)))
+             (content (logseq-org-sync-reconcile--md-body-content body))
+             (new-body (concat "#+BEGIN_SRC" src-lang "\n"
+                               (if content (concat content "\n") "")
+                               "#+END_SRC")))
+        (setq block (plist-put block :text ""))
+        (logseq-org-sync-reconcile--set-body block new-body)))
+     ((and text (logseq-org-sync-reconcile--md-pipe-table-p
+                 (concat text (if body (concat "\n" body) ""))))
+      (let* ((table (concat text (if body (concat "\n" body) "")))
+             (new-body (concat "#+BEGIN_SRC markdown\n" table "\n#+END_SRC")))
+        (setq block (plist-put block :text ""))
+        (logseq-org-sync-reconcile--set-body block new-body)))
+     (t block))))
+
+(defun logseq-org-sync-reconcile--roam-block-to-logseq (block)
+  "Translate an org-roam BLOCK into a Logseq Markdown block.
+A `#+BEGIN_SRC lang' body becomes a Markdown fence; a `#+BEGIN_SRC
+markdown' body holding a pipe table is unwrapped to a native table
+\(§11.2).  Other blocks are returned unchanged."
+  (let* ((body (plist-get block :body))
+         (src (logseq-org-sync-reconcile--src-block body)))
+    (cond
+     ((and src (string= (car src) "markdown")
+           (logseq-org-sync-reconcile--md-pipe-table-p (cdr src)))
+      (let* ((lines (split-string (cdr src) "\n"))
+             (header (car lines))
+             (rows (cdr lines)))
+        (setq block (plist-put block :text header))
+        (logseq-org-sync-reconcile--set-body
+         block (and rows (mapconcat #'identity rows "\n")))))
+     (src
+      (let* ((lang (car src))
+             (content (cdr src))
+             (new-body (concat content (if (string-empty-p content) "" "\n") "```")))
+        (setq block (plist-put block :text (concat "```" lang)))
+        (logseq-org-sync-reconcile--set-body block new-body)))
+     (t block))))
+
+(defun logseq-org-sync-reconcile--map-block-body (fn block)
+  "Return BLOCK transformed by FN (block -> block), recursing into children."
+  (let ((result (funcall fn block)))
+    (let ((children (plist-get result :children)))
+      (when children
+        (setq result
+              (plist-put result :children
+                         (mapcar (lambda (child)
+                                   (logseq-org-sync-reconcile--map-block-body
+                                    fn child))
+                                 children)))))
+    result))
+
+(defun logseq-org-sync-reconcile--node-bodies (node fn)
+  "Return NODE with each block transformed by FN (block -> block)."
+  (let ((content (plist-get node :content)))
+    (if content
+        (plist-put node :content
+                   (mapcar (lambda (block)
+                             (logseq-org-sync-reconcile--map-block-body fn block))
+                           content))
+      node)))
+
+(defun logseq-org-sync-reconcile--node-body-to-roam (node)
+  "Return NODE with Markdown block bodies translated to org-roam."
+  (logseq-org-sync-reconcile--node-bodies
+   node #'logseq-org-sync-reconcile--md-block-to-roam))
+
+(defun logseq-org-sync-reconcile--node-body-to-logseq (node)
+  "Return NODE with org-roam block bodies translated to Markdown."
+  (logseq-org-sync-reconcile--node-bodies
+   node #'logseq-org-sync-reconcile--roam-block-to-logseq))
+
+(defun logseq-org-sync-reconcile--translate-plan (plan logseq roam graph)
+  "Translate block references and block bodies in PLAN for the target side.
 LOGSEQ and ROAM are the two node tables; they supply the block
-registries used to resolve block UUIDs to text."
+registries used to resolve block UUIDs to text.  GRAPH supplies the
+Logseq format, so block bodies are only translated for Markdown graphs."
   (let ((logseq-registry (logseq-org-sync-reconcile--block-registry
                           (hash-table-values logseq)))
         (roam-registry (logseq-org-sync-reconcile--block-registry
-                        (hash-table-values roam))))
+                        (hash-table-values roam)))
+        (markdown-p (logseq-org-sync-reconcile--markdown-p graph)))
     (mapcar
      (lambda (action)
        (let ((type (plist-get action :type))
              (node (plist-get action :node)))
          (cond
           ((and node (memq type '(create-roam update-roam)))
-           (plist-put action :node
-                      (logseq-org-sync-reconcile--node-to-roam
-                       node logseq-registry)))
+           (let ((translated (logseq-org-sync-reconcile--node-to-roam
+                              node logseq-registry)))
+             (when markdown-p
+               (setq translated
+                     (logseq-org-sync-reconcile--node-body-to-roam translated)))
+             (plist-put action :node translated)))
           ((and node (memq type '(create-logseq update-logseq)))
-           (plist-put action :node
-                      (logseq-org-sync-reconcile--node-to-logseq
-                       node roam-registry))))
+           (let ((translated (logseq-org-sync-reconcile--node-to-logseq
+                              node roam-registry)))
+             (when markdown-p
+               (setq translated
+                     (logseq-org-sync-reconcile--node-body-to-logseq translated)))
+             (plist-put action :node translated))))
          action))
      plan)))
 
@@ -602,8 +756,8 @@ registries used to resolve block UUIDs to text."
   "Return an ordered reconciliation plan for GRAPH given the last-synced STATE.
 The plan is a list of action plists (see the file Commentary).  Planning
 reads files but performs no writes, so it is safe to call for a preview.
-Block references in create/update nodes are translated for their target
-side (AGENTS.md §6)."
+Block references and block bodies in create/update nodes are translated
+for their target side (AGENTS.md §6, §11.1 step 6)."
   (let ((logseq (logseq-org-sync-reconcile--scan-logseq graph))
         (roam (logseq-org-sync-reconcile--scan-roam graph))
         (ids nil)
@@ -617,7 +771,7 @@ side (AGENTS.md §6)."
             (append plan
                     (logseq-org-sync-reconcile--merge-classify
                      id (gethash id logseq) (gethash id roam) state graph))))
-    (logseq-org-sync-reconcile--translate-plan plan logseq roam)))
+    (logseq-org-sync-reconcile--translate-plan plan logseq roam graph)))
 
 ;;;###autoload
 (defun logseq-org-sync-reconcile-dry-run (graph state)

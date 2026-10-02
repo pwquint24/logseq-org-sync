@@ -473,5 +473,98 @@ The temp directory is deleted afterwards."
         (should (string-match-p (concat "id:: " block-uuid) text)))
       (should (null (logseq-org-sync-reconcile-plan graph state))))))
 
+(ert-deftest logseq-org-sync-reconcile--translate-md-code-block-to-roam ()
+  (should (equal
+           '(:level 1 :text ""
+             :body "#+BEGIN_SRC elisp\n(+ 1 2)\n#+END_SRC")
+           (logseq-org-sync-reconcile--md-block-to-roam
+            '(:level 1 :text "```elisp" :body "(+ 1 2)\n```")))))
+
+(ert-deftest logseq-org-sync-reconcile--translate-md-fence-no-language-to-roam ()
+  (should (equal
+           '(:level 1 :text "" :body "#+BEGIN_SRC\n(+ 1 2)\n#+END_SRC")
+           (logseq-org-sync-reconcile--md-block-to-roam
+            '(:level 1 :text "```" :body "(+ 1 2)\n```")))))
+
+(ert-deftest logseq-org-sync-reconcile--translate-md-table-to-roam ()
+  (should (equal
+           '(:level 1 :text ""
+             :body "#+BEGIN_SRC markdown\n| a | b |\n| 1 | 2 |\n#+END_SRC")
+           (logseq-org-sync-reconcile--md-block-to-roam
+            '(:level 1 :text "| a | b |" :body "| 1 | 2 |")))))
+
+(ert-deftest logseq-org-sync-reconcile--translate-md-paragraph-verbatim ()
+  (should (equal
+           '(:level 1 :text "Plain" :body "line one\nline two")
+           (logseq-org-sync-reconcile--md-block-to-roam
+            '(:level 1 :text "Plain" :body "line one\nline two")))))
+
+(ert-deftest logseq-org-sync-reconcile--translate-roam-src-to-md ()
+  (should (equal
+           '(:level 1 :text "```elisp" :body "(+ 1 2)\n```")
+           (logseq-org-sync-reconcile--roam-block-to-logseq
+            '(:level 1 :text "Code"
+              :body "#+BEGIN_SRC elisp\n(+ 1 2)\n#+END_SRC")))))
+
+(ert-deftest logseq-org-sync-reconcile--translate-roam-table-to-md ()
+  (should (equal
+           '(:level 1 :text "| a | b |" :body "| 1 | 2 |")
+           (logseq-org-sync-reconcile--roam-block-to-logseq
+            '(:level 1 :text "Table"
+              :body "#+BEGIN_SRC markdown\n| a | b |\n| 1 | 2 |\n#+END_SRC")))))
+
+(ert-deftest logseq-org-sync-reconcile--markdown-body-propagates-to-roam ()
+  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
+                                                        (lroot :logseq-root)
+                                                        (rroot :roam-root))
+    (let ((state (logseq-org-sync-reconcile-test--baseline graph)))
+      (write-region (concat "id:: 10000000-0000-0000-0000-000000000006\n\n"
+                            "- ```elisp\n"
+                            "  (+ 1 2)\n"
+                            "  ```\n"
+                            "- | Syntax | Description |\n"
+                            "  | markdown | pipe table |\n")
+                    nil (expand-file-name "pages/Body.md" lroot))
+      (let ((plan (logseq-org-sync-reconcile-plan graph state)))
+        (should (equal '(create-roam)
+                       (logseq-org-sync-reconcile-test--types plan)))
+        (setq state (logseq-org-sync-reconcile-apply graph state plan)))
+      (let ((text (with-temp-buffer
+                    (insert-file-contents (expand-file-name "pages/Body.org" rroot))
+                    (buffer-string))))
+        (should (string-match-p
+                 (regexp-quote "#+BEGIN_SRC elisp\n(+ 1 2)\n#+END_SRC") text))
+        (should (string-match-p
+                 (regexp-quote
+                  "#+BEGIN_SRC markdown\n| Syntax | Description |\n| markdown | pipe table |\n#+END_SRC")
+                 text)))
+      (should (null (logseq-org-sync-reconcile-plan graph state))))))
+
+(ert-deftest logseq-org-sync-reconcile--markdown-body-propagates-to-logseq ()
+  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
+                                                        (lroot :logseq-root)
+                                                        (rroot :roam-root))
+    (let ((state (logseq-org-sync-reconcile-test--baseline graph)))
+      (write-region (concat ":PROPERTIES:\n"
+                            ":ID: 10000000-0000-0000-0000-000000000007\n"
+                            ":END:\n"
+                            "#+title: Body\n\n"
+                            "* Code\n"
+                            "#+BEGIN_SRC elisp\n(+ 1 2)\n#+END_SRC\n"
+                            "* Table\n"
+                            "#+BEGIN_SRC markdown\n| a | b |\n| 1 | 2 |\n#+END_SRC\n")
+                    nil (expand-file-name "pages/Body.org" rroot))
+      (let ((plan (logseq-org-sync-reconcile-plan graph state)))
+        (should (equal '(create-logseq)
+                       (logseq-org-sync-reconcile-test--types plan)))
+        (setq state (logseq-org-sync-reconcile-apply graph state plan)))
+      (let ((text (with-temp-buffer
+                    (insert-file-contents (expand-file-name "pages/Body.md" lroot))
+                    (buffer-string))))
+        (should (string-match-p (regexp-quote "```elisp\n  (+ 1 2)\n  ```") text))
+        (should (string-match-p
+                 (regexp-quote "| a | b |\n  | 1 | 2 |") text)))
+      (should (null (logseq-org-sync-reconcile-plan graph state))))))
+
 (provide 'logseq-org-sync-reconcile-test)
 ;;; logseq-org-sync-reconcile-test.el ends here

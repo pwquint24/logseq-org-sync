@@ -1,0 +1,353 @@
+#+title: logseq-org-sync
+#+author: logseq-org-sync authors
+#+options: toc:2 num:t
+
+*logseq-org-sync* is a two-way sync between a [[https://logseq.com][Logseq]] graph (`.org` or
+`.md`) and an [[https://www.orgroam.com][org-roam]] directory, written in Emacs Lisp.  Changes made on
+either side propagate to the other without clobbering concurrent work, and
+every note keeps one stable identity on both sides.
+
+The full architecture is in [[file:AGENTS.md][AGENTS.md]]; the on-disk formats are in
+[[file:LOGSEQ-FORMAT.md][LOGSEQ-FORMAT.md]] and [[file:ORG-ROAM-FORMAT][ORG-ROAM-FORMAT]].
+
+* TL;DR
+
+1. Put the repository on your ~load-path~, then:
+
+   #+begin_src elisp
+     (add-to-list 'load-path "/path/to/logseq-org-sync")
+     (require 'logseq-org-sync)
+   #+end_src
+
+2. Add a graph by picking its Logseq folder:
+
+   #+begin_src elisp
+     M-x logseq-org-sync-add-graph
+   #+end_src
+
+   This derives the graph name from the folder basename and mirrors it into
+   ~<logseq-org-sync-roam-directory>/<name>~.  ~logseq-org-sync-roam-directory~
+   defaults to ~org-roam-directory~ when org-roam is loaded.
+
+3. Sync it:
+
+   #+begin_src elisp
+     M-x logseq-org-sync            ;; pick a graph, preview, confirm
+     M-x logseq-org-sync-here       ;; sync the graph of the current buffer
+     M-x logseq-org-sync-all        ;; sync every configured graph
+   #+end_src
+
+4. (Optional) sync automatically on save:
+
+   #+begin_src elisp
+     (add-hook 'after-save-hook #'logseq-org-sync-after-save)
+   #+end_src
+
+   and watch for changes made by the Logseq app:
+
+   #+begin_src elisp
+     M-x logseq-org-sync-watch      ;; choose a graph
+     M-x logseq-org-sync-unwatch    ;; stop
+   #+end_src
+
+The rest of this document explains what actually happens, what the state cache
+is for, and the setup gotchas to watch out for.
+
+* Requirements
+
+- Emacs with Org.  The engine uses ~org-element~, ~org-id~, and ~file-notify~.
+- For Markdown graphs, tree-sitter with the ~markdown~ and ~markdown-inline~
+  grammars.  Link extraction uses ~markdown-inline~ when available and falls
+  back to a regexp otherwise.
+- org-roam is *not* required to run the engine or its tests.  The org-roam
+  side is read and written directly; org-roam is only relevant as the place
+  where the mirror lives and as the tool that indexes the result.
+
+* Graph configuration
+
+Graphs live in the ~logseq-org-sync-graphs~ user option.  Each entry only needs
+a name and a Logseq folder; the org-roam mirror directory is derived.
+
+#+begin_src elisp
+  (setq logseq-org-sync-roam-directory "~/org-roam")
+
+  (setq logseq-org-sync-graphs
+        '((:name "Work"     :logseq-root "~/graphs/Work")
+          (:name "Personal" :logseq-root "~/graphs/Personal")))
+#+end_src
+
+With the configuration above:
+
+- ~~/graphs/Work~ mirrors into =~/org-roam/Work=
+- ~~/graphs/Personal~ mirrors into =~/org-roam/Personal=
+
+Each mirror contains the same =pages/= and =journals/= subtrees as its Logseq
+graph.  The mapping is 1:1 on the relative path within a graph; for a Markdown
+graph only the extension changes (~.md~ on the Logseq side, ~.org~ on the
+org-roam side).
+
+*Per-graph keys* (all optional except ~:name~ and ~:logseq-root~):
+
+| Key                    | Default                                            |
+|------------------------+----------------------------------------------------|
+| ~:roam-root~           | ~<logseq-org-sync-roam-directory>/<name>~          |
+| ~:pages-directory~     | =pages=                                             |
+| ~:journals-directory~  | =journals=                                          |
+| ~:state-file~          | ~<logseq-org-sync-state-directory>/<name>.plist~    |
+
+*Format detection*
+
+The Logseq format is read from ~<logseq-root>/logseq/config.edn~ (falling back
+to ~<logseq-root>/config.edn~).  If ~:preferred-format "Org"~ is active the
+graph uses ~.org~ files; otherwise it uses ~.md~.  The org-roam side is always
+~.org~.
+
+* Commands
+
+| Command                         | What it does                                                         |
+|---------------------------------+----------------------------------------------------------------------|
+| ~logseq-org-sync~               | Choose a graph; show a dry-run preview; ask before applying.         |
+| ~logseq-org-sync-here~          | Sync the graph containing the current buffer's file (either side).   |
+| ~logseq-org-sync-dry-run~       | Preview a graph's plan without writing anything.                     |
+| ~logseq-org-sync-run~           | Non-interactive sync; forces newest-wins so it never prompts.        |
+| ~logseq-org-sync-all~           | Non-interactive sync of every configured graph.                      |
+| ~logseq-org-sync-add-graph~     | Pick a Logseq folder; derive name + mirror; save the config.         |
+| ~logseq-org-sync-remove-graph~  | Choose a graph; stop syncing it (files are left in place).           |
+| ~logseq-org-sync-watch~         | Watch a graph for external changes and re-sync (debounced).          |
+| ~logseq-org-sync-unwatch~       | Stop watching a graph (or all graphs).                               |
+| ~logseq-org-sync-after-save~    | ~after-save-hook~ function: sync the graph of the saved file.        |
+
+~logseq-org-sync-here~ and ~logseq-org-sync-after-save~ both match the current
+file against every configured graph's ~pages/~ and ~journals/~ subtrees, on
+both the Logseq and org-roam roots, so the same command works regardless of
+which side the buffer is on.
+
+* How the two graphs are translated
+
+Both sides read into a common *intermediate representation* (IR) and write from
+it.  This makes translation symmetric and testable:
+
+#+begin_src elisp
+  (node :id "uuid"
+        :title "Foo"
+        :aliases ("a" "b")
+        :tags ("a" "b")
+        :properties (("KEY" . "value"))
+        :content ((:level 1 :text "block text" :todo "TODO"
+                   :properties (("ID" . "uuid"))
+                   :body "body text"
+                   :children (...)))
+        :links ((fuzzy "Title" nil)))
+#+end_src
+
+A *node* is one note (page/journal).  A *block* is one Logseq block / one
+org-roam heading.  The parsers turn files into IR; the writers turn IR back
+into files; the reconciler decides which side's IR is authoritative and
+translates links and block references for the target side.
+
+* Element translation
+
+| Concern        | Logseq =.org=            | Logseq Markdown          | org-roam =.org=                  |
+|----------------+--------------------------+--------------------------+----------------------------------|
+| Identity       | =#+id: <uuid>=           | =id:: <uuid>=            | =:ID: <uuid>=                    |
+| Title          | filename; =#+title:=     | filename; =title::=      | =#+title:=                       |
+| Aliases        | =#+alias: a, b=          | =alias:: a, b=           | =:ROAM_ALIASES: "a" "b"=         |
+| Page tags      | =#+tags:= / =#+filetags:=| =tags:: a, b=            | =#+filetags: :a:b:=              |
+| Page link      | =[[Title]]=              | =[[Title]]= / =[t]([[Title]])= | =[[id:uuid][Title]]=       |
+| Block ref      | =((uuid))=               | =((uuid))=               | =[[id:uuid][block text]]=        |
+| Block embed    | ={{embed ((uuid))}}=     | ={{embed ((uuid))}}=     | =[[id:uuid][#embed block text]]= |
+| Structure      | headlines                | indented list items      | headings / document              |
+| TODO           | Org TODO keywords        | =TODO=/=DOING=/=DONE=…    | Org TODO keywords                |
+| Dates          | =SCHEDULED:= /=DEADLINE:=| =SCHEDULED:= /=DEADLINE:=| org timestamps                   |
+| Block body     | section body             | indented continuation     | section body                     |
+
+**Identity**
+
+The shared UUID is the one thing that ties a note together across the two
+sides.  New IDs come from ~org-id-new~, the same generator org-roam uses for
+new nodes, so generated IDs stay in org-roam's namespace.
+
+**Links**
+
+The sync translates links in both directions through the UUID map:
+
+- =roam → logseq=: =[[id:uuid][Title]]= becomes =[[Title]]= (UUID → title).
+- =logseq → roam=: =[[Title]]= becomes =[[id:uuid][Title]]= (title → UUID).
+
+Dead =[[Title]]= links stay fuzzy on the org-roam side; ambiguous titles are
+left un-converted on both sides.  Non-page links (=file:=, URLs) pass through.
+
+**Block references and embeds**
+
+Logseq block references =((uuid))= and embeds ={{embed ((uuid))}}= are matched
+to org-roam =[[id:uuid][...]]= links.  An embed is distinguished on the
+org-roam side by the =#embed= description prefix
+(~logseq-org-sync-block-embed-prefix~).  A block's =:id:= is adopted as the
+org-roam heading =:ID:=, and the reverse mapping restores the =((uuid))= /
+={{embed ((uuid))}}= spelling.
+
+**Block bodies**
+
+Block bodies (paragraphs, tables, code fences, quotes) round-trip byte-for-byte
+*within the same format* (=.org ↔ .org= and Markdown ↔ Markdown).  Across
+formats, two constructs are translated:
+
+- Fenced code blocks ↔ =#+BEGIN_SRC=:
+
+  #+begin_example
+    ```elisp                      #+BEGIN_SRC elisp
+    (+ 1 2)          <->          (+ 1 2)
+    ```                           #+END_SRC
+  #+end_example
+
+- Markdown pipe tables are *not* converted to org tables.  They are wrapped
+  verbatim in a =#+BEGIN_SRC markdown= block on the org-roam side, and
+  unwrapped back on the Logseq side:
+
+  #+begin_example
+    | Syntax | Description |      #+BEGIN_SRC markdown
+    |--------|-------------|      | Syntax | Description |
+    | md     | pipe table  |  <-> |--------|-------------|
+                                 | md     | pipe table  |
+                                 #+END_SRC
+  #+end_example
+
+Other body constructs (blockquotes, =#+BEGIN_*= blocks) cross formats verbatim
+and are not structurally translated.
+
+* The state cache
+
+Each graph has one small metadata file.  It stores *metadata only — never
+content*:
+
+- ~:id~, cached ~:title~
+- ~:logseq-path~ and ~:roam-path~
+- ~:logseq-hash~ / ~:roam-hash~ (SHA-256)
+- ~:logseq-mtime~ / ~:roam-mtime~
+- ~:last-sync~
+
+File bodies, blocks, links, tags, and timestamps live only in the actual
+=.org= / =.md= files.
+
+The cache is used for exactly three decisions:
+
+1. *Change detection* — compare the current file hash with the last-synced hash.
+2. *Rename detection* — same content but a new path means a rename to mirror.
+3. *Deletion detection* — a side is missing but the state says it existed, so
+   the surviving copy is moved to trash.
+
+Path discovery is deterministic from the two roots, so the engine can find
+every file even with an empty or missing state.
+
+*Regenerating a corrupt or deleted state cache*
+
+The state file is safe to delete.  ~logseq-org-sync-state-load~ treats a
+missing or invalid file as an *empty* state, and the next sync re-baselines and
+saves a fresh file.  No note content is deleted or overwritten by deleting the
+cache itself.
+
+To regenerate it:
+
+1. Delete the graph's state file:
+
+   #+begin_src elisp
+     ~/.emacs.d/logseq-org-sync/<name>.plist   ;; default
+     ;; or the explicit :state-file for that graph
+   #+end_src
+
+2. Run a sync:
+
+   #+begin_src elisp
+     M-x logseq-org-sync
+   #+end_src
+
+On the first run after deletion:
+
+| Situation                          | Result                                                     |
+|------------------------------------+------------------------------------------------------------|
+| File exists on *both* sides        | =seed= — record a baseline, write nothing.                 |
+| File exists on *only one* side     | Treated as =new= — the missing side is created.            |
+| File was deleted on one side       | Not seen as a deletion; the survivor is recreated instead. |
+| File was renamed on one side       | Not seen as a rename; both sides seed under current paths. |
+
+In short: *safe to delete, self-healing, but it forgets what changed since the
+last sync* until a fresh baseline is written.  A more detailed breakdown is in
+[[file:STATE-CACHE.md][STATE-CACHE.md]].
+
+* Safety
+
+- *Dry-run* — every interactive sync shows a plan first; nothing is written
+  until you confirm.
+- *Backup* — before an overwrite, the existing file is copied under
+  =<graph root>/.backup/= (~logseq-org-sync-safety-backup-directory~).
+- *Trash* — deletions are moved to =<graph root>/.trash/=, never hard-deleted
+  (~logseq-org-sync-reconcile-trash-directory~).
+- *Conflicts* — when both sides changed, *newest file wins* by default.  Set
+  ~logseq-org-sync-reconcile-conflict-policy~ to ~prompt~ to choose per
+  conflict.
+- *Updated hook* — ~logseq-org-sync-updated-hook~ runs after any non-empty
+  sync.
+
+* Setup gotchas
+
+**org-roam**
+
+- The sync *hand-writes* org-roam files rather than using
+  ~org-roam-capture-~.  Files created this way are not in org-roam's database
+  until it re-indexes.  Run =M-x org-roam-db-sync= after the first sync if
+  org-roam's graph/backlinks look stale.
+- ~logseq-org-sync-roam-directory~ defaults to ~org-roam-directory~ when it is
+  bound, so the per-graph mirrors land inside the org-roam directory.  Set
+  ~org-roam-directory~ (or ~logseq-org-sync-roam-directory~) *before* adding
+  graphs.
+
+**org-roam-dailies**
+
+- org-roam has one global ~org-roam-dailies-directory~; it has no notion of a
+  per-graph =journals/= subtree.  This sync does *not* use org-roam's dailies
+  machinery.  Each graph keeps its own =journals/= directory and the sync
+  treats journals as ordinary files.  Do not expect org-roam's dailies capture
+  to target these synced journals automatically.
+
+**Logseq**
+
+- Format is decided by =:preferred-format "Org"= in =config.edn=.  A commented
+  or absent setting means Markdown.  Make sure this matches what the graph
+  actually uses.
+- The sync is self-contained: it never shells out to the Logseq app, its HTTP
+  API, or its Node parser.  The Logseq app can be closed, or you can use
+  ~logseq-org-sync-watch~ to pick up its writes.
+- =assets/=, =logseq/=, =draws/=, and =config.edn= are Logseq-only and are not
+  synced.  Local asset links (=../assets/…=) are therefore broken on the
+  org-roam side.
+
+**General limitations**
+
+- Priority cookies (=[#A]=) are not supported (org-element drops the text before
+  a priority cookie).
+- Markdown block tags (=#tag= in block text) are preserved verbatim rather than
+  translated into the =:tags= field.
+- Cross-format body translation covers code blocks and Markdown tables only;
+  other body constructs cross formats verbatim.
+
+* Testing
+
+#+begin_src sh
+  make test
+#+end_src
+
+The suite covers the legacy converter and every sync phase: scanner/parser
+round-trips, identity, state, reconciliation, safety, and the Phase 7 command
+layer.
+
+* Related documentation
+
+- [[file:AGENTS.md][AGENTS.md]] — architecture, IR, sync algorithm, phases, deferred work.
+- [[file:LOGSEQ-FORMAT.md][LOGSEQ-FORMAT.md]] — the Logseq =.org= / =.md= format reference.
+- [[file:ORG-ROAM-FORMAT][ORG-ROAM-FORMAT]] — the org-roam =.org= format reference.
+- [[file:STATE-CACHE.md][STATE-CACHE.md]] — the state cache in detail.
+- [[file:fixtures/README.md][fixtures/README.md]] — the paired fixture contract.
+
+* License
+
+See [[file:LICENSE][LICENSE]].

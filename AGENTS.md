@@ -161,20 +161,25 @@ relocation is deferred (see §11).
 
 **Multi-graph**: each graph is an independent sync unit with its own config
 (logseq root, org-roam root, pages/journal dirs, state file). The sync
-operates **one graph at a time**. This is implemented by the Phase 7
+operates **one graph at a time** (or all configured graphs via
+`logseq-org-sync-all`). This is implemented by the Phase 7
 `logseq-org-sync-graphs` defcustom (§9.13):
 
 ```elisp
+(setq logseq-org-sync-roam-directory "~/org-roam")
 (setq logseq-org-sync-graphs
-      '(("work"
-         :name "work"
-         :logseq-root "~/graphs/Work"
-         :roam-root "~/org-roam/Work"
-         :pages-directory "pages"
-         :journals-directory "journals"
-         :state-file "~/.emacs.d/logseq-org-sync/work.plist")
-        ("personal" ...)))
+      '((:name "Work"
+         :logseq-root "~/graphs/Work")
+        (:name "Personal"
+         :logseq-root "~/graphs/Personal")))
 ```
+
+Each graph's `:roam-root` defaults to
+`<logseq-org-sync-roam-directory>/<name>` (so the examples above mirror into
+`~/org-roam/Work` and `~/org-roam/Personal`), which makes
+`logseq-org-sync-add-graph` a matter of picking a Logseq folder.  Optional
+per-graph keys remain `:roam-root`, `:pages-directory`, `:journals-directory`,
+and `:state-file`.
 
 **org-roam dailies nuance**: org-roam uses a single global
 `org-roam-dailies-directory`, which does not express "one `journals/` per
@@ -565,14 +570,15 @@ A block is a plist with deterministic key order (nil keys omitted):
 - Fuzzy-link collection skips org-internal links (`[[#custom-id]]`,
   `[[*heading]]`); image/asset links are not specially handled (deferred, §11).
 - Block bodies beyond the first line (tables, code fences, multi-line text)
-  round-trip same-format through the block's `:body` field (`.org ↔ .org` and
-  Markdown ↔ Markdown); cross-format body translation is still deferred
-  (§11.1/§11.2).  A block keeps its first line (`:text`), TODO marker,
+  round-trip through the block's `:body` field: byte-for-byte same-format
+  (`.org ↔ .org` and Markdown ↔ Markdown), and cross-format for fenced code
+  blocks and Markdown tables (§11.1/§11.2).  Other body constructs cross
+  formats verbatim.  A block keeps its first line (`:text`), TODO marker,
   `:tags`, block `:properties`, `SCHEDULED:`/`DEADLINE:` lines, `:body`, and
   `:children`.
 - Markdown block tags (`#tag`) are preserved verbatim in `:text` rather than
   translated into the IR `:tags` field; org headline tags (`:tag:`) are parsed
-  into `:tags` normally.
+  into `:tags` normally.  Planned work: §11.3.
 
 ### 9.9 Phase 3 module — `logseq-org-sync-roam.el`
 
@@ -752,6 +758,16 @@ direction maps a `[[id:uuid][...]]` link whose UUID is in the registry back to
 left untouched.  Because the description is regenerated from the registry, the
 embed/reference distinction round-trips losslessly.
 
+**Cross-format block bodies (AGENTS.md §11.1 step 6, §11.2).**  For Markdown
+graphs only, `-plan` also translates each block's `:body` for its target side:
+Logseq Markdown fenced code blocks become `#+BEGIN_SRC` blocks and Markdown
+pipe tables are wrapped verbatim in `#+BEGIN_SRC markdown` blocks on the
+org-roam side, with the reverse unwrapping in the other direction
+(`logseq-org-sync-reconcile--md-block-to-roam` /
+`--roam-block-to-logseq`, applied by `--translate-plan`).  Other body
+constructs cross formats verbatim (AGENTS.md §11.1).  Org-format Logseq graphs
+need no body translation because both sides already use org syntax.
+
 **Known simplification.**  The reconciler hand-writes org-roam files with the
 Phase 3 writer (`logseq-org-sync-roam-write`) rather than org-roam's capture
 path (§9.10).  This keeps the engine and its tests independent of a live
@@ -792,20 +808,36 @@ not add new sync logic; planning and execution stay in
 `logseq-org-sync-reconcile` / `logseq-org-sync-safety`.
 
 **Graph configuration** (AGENTS.md §2) lives in the `logseq-org-sync-graphs`
-defcustom: a list of plists, each with `:name`, `:logseq-root`, `:roam-root`,
-optional `:pages-directory`/`:journals-directory` (defaulting to `pages` /
-`journals`), and an optional `:state-file`.  When `:state-file` is omitted it
-defaults to `<logseq-org-sync-state-directory>/<name>.plist`.
+defcustom: a list of plists, each with `:name`, `:logseq-root`, and an
+optional `:roam-root` (defaulting to
+`<logseq-org-sync-roam-directory>/<name>`).  Optional
+`:pages-directory`/`:journals-directory` default to `pages` / `journals`, and
+an optional `:state-file` defaults to
+`<logseq-org-sync-state-directory>/<name>.plist`.  `logseq-org-sync-roam-directory`
+defaults to `org-roam-directory` when org-roam is loaded, so mirrors live
+inside the org-roam directory.
 
 **Public functions:**
 
 - `logseq-org-sync` (graph) — interactive command: resolve a graph, load its
   state, show the dry-run preview, ask for confirmation, then apply and save
   state.  Operates one graph at a time.
+- `logseq-org-sync-here` — sync the graph containing the current buffer's
+  file, whether that file is on the Logseq side or the org-roam side; same
+  preview/confirm flow as `logseq-org-sync`.
 - `logseq-org-sync-dry-run` (graph) — interactive preview only.
 - `logseq-org-sync-run` (graph) — non-interactive sync; forces the conflict
   policy to `newest-wins` so it never prompts, applies, saves state, and
   returns the new state.  Used by the automatic triggers below.
+- `logseq-org-sync-all` — non-interactive sync of every configured graph via
+  `logseq-org-sync-run`.
+- `logseq-org-sync-add-graph` — pick a Logseq folder; the graph name defaults
+  to the folder's basename and the `:roam-root` to
+  `<logseq-org-sync-roam-directory>/<name>`; creates the mirror subdirectory
+  and saves `logseq-org-sync-graphs` via Customize.
+- `logseq-org-sync-remove-graph` — choose a configured graph, stop its
+  watchers, and remove it from `logseq-org-sync-graphs` (files are left in
+  place).
 - `logseq-org-sync-after-save` — an `after-save-hook` function; syncs the
   configured graph containing `buffer-file-name` when it is a note under a
   graph's `pages/` or `journals/` subtree.
@@ -816,6 +848,8 @@ defaults to `<logseq-org-sync-state-directory>/<name>.plist`.
 **Defcustoms:**
 
 - `logseq-org-sync-graphs` — the configured graphs (nil by default).
+- `logseq-org-sync-roam-directory` — the parent of per-graph mirror
+  subdirectories (defaults to `org-roam-directory` when bound).
 - `logseq-org-sync-state-directory` — under `user-emacs-directory` by default.
 - `logseq-org-sync-watch-delay` — 2.0 seconds by default.
 
@@ -839,7 +873,7 @@ defaults to `<logseq-org-sync-state-directory>/<name>.plist`.
    time) + `after-save-hook` / `file-notify` watchers.
 9. **Phase 8 — Tests & docs.** Round-trip invariants, fixture tests, README.
 
-Phases 0–8 are implemented (§9.8–§9.13 plus `README.md`,
+Phases 0–8 are implemented (§9.8–§9.13 plus `README.org`,
 `LOGSEQ-FORMAT.md`, `ORG-ROAM-FORMAT`); the remaining work is the deferred
 scope below.
 
@@ -854,26 +888,25 @@ scope below.
   Logseq-only, local asset links (e.g. `../assets/foo.png`) are broken on the
   org-roam side; v1 assumes no local assets or out-of-band asset sync.
 - Block bodies beyond the first line (tables, code fences, multi-line text)
-  round-trip same-format through `:body`, but cross-format body translation
-  is still deferred; Markdown block tags (`#tag`) are not translated into
-  `:tags`.  See §9.8, §11.1, and §11.2 (Markdown tables round-trip as
-  verbatim `#+BEGIN_SRC markdown` blocks).
+  round-trip through `:body` (same-format byte-for-byte, plus cross-format
+  for fenced code blocks and Markdown tables); Markdown block tags (`#tag`)
+  are not translated into `:tags` (planned §11.3).  See §9.8, §11.1, and
+  §11.2.
 - Live/continuous sync: Phase 7 provides an `after-save-hook` and
   `file-notify` watchers; richer or more robust continuous operation (e.g.
   finer-grained watch filtering, queueing) remains a future concern.
 
-### 11.1 Planned — block-body support in the IR
+### 11.1 Block-body support in the IR
 
 Logseq itself keeps a block's full body (`:block/body` AST + `:block/content`
 raw text; see `og/deps/graph-parser/src/logseq/graph_parser/block.cljs`
-`extract-blocks` / `get-block-content`), so the headline-only IR is the sync
-engine's own simplification, not Logseq's.  The plan is to add an optional
-`:body` string to the block plist and teach each parser/writer to round-trip
-it.
+`extract-blocks` / `get-block-content`), so the headline-only IR was the sync
+engine's own simplification, not Logseq's.  An optional `:body` string has
+been added to the block plist, and the parsers and writers round-trip it.
 
-Steps 1–5 (the IR schema, both parser sides, the writers, and same-format
-round-trip tests) are implemented; steps 6–7 (cross-format body translation
-and the remaining doc sweep) remain.
+Steps 1–7 are implemented: the IR schema, both parser sides, the writers,
+same-format round-trip tests, cross-format body translation, and the doc
+sweep.
 
 Steps:
 
@@ -906,10 +939,12 @@ Steps:
    side (§11.2).  Other `markdown ↔ org` body constructs (blockquotes,
    `#+BEGIN_*` blocks) remain deferred: such a body crossing formats is
    carried verbatim and documented as un-translated, or dropped on the
-   foreign side.
+   foreign side.  This translation lives in
+   `logseq-org-sync-reconcile--md-block-to-roam` /
+   `--roam-block-to-logseq`, applied by `--translate-plan` for Markdown
+   graphs (§9.11).
 7. **Update docs** (`AGENTS.md` §5 IR table, §9.8/§9.9/§9.11,
-   `LOGSEQ-FORMAT.md`, `ORG-ROAM-FORMAT`) and mark this item done once steps
-   1–5 land.
+   `LOGSEQ-FORMAT.md`, `ORG-ROAM-FORMAT`) — done.
 
 Open decisions to resolve during implementation:
 
@@ -921,12 +956,14 @@ Open decisions to resolve during implementation:
 - whether `:body` stores raw text only, or a future structured AST (mirroring
   Logseq's `:block/body` vs `:block/content` split) is added later.
 
-### 11.2 Decided — Markdown tables wrap in a `#+BEGIN_SRC markdown` block
+### 11.2 Markdown tables wrap in a `#+BEGIN_SRC markdown` block
 
 Cross-format block bodies do **not** translate Markdown pipe tables into
 native org tables.  A Markdown pipe table crossing from a Markdown-format
 Logseq graph into its org-roam mirror is carried **verbatim** inside a
-`#+BEGIN_SRC markdown` … `#+END_SRC` block.  Rationale: GFM and org tables
+`#+BEGIN_SRC markdown` … `#+END_SRC` block (implemented in
+`logseq-org-sync-reconcile--md-block-to-roam` /
+`--roam-block-to-logseq`, §9.11).  Rationale: GFM and org tables
 disagree on alignment storage (delimiter-row colons vs. org's auto-detected
 `<l>`/`<c>`/`<r>` cookies), escaped pipes (`\|`) have no clean org-table
 equivalent, and cell text would otherwise require per-cell inline translation.
@@ -971,3 +1008,53 @@ as body lines, and the org-roam parser/writer wraps/unwraps the
   `:body` rows before wrapping.
 - The canonical wrapped form preserves the delimiter row and alignment colons
   exactly; neither side normalizes the table text.
+
+### 11.3 Planned — Markdown block tags (`#tag`)
+
+**Current state.**  Logseq Markdown block tags are inline references in a
+block's first line: `#tag`, or `#[[tag with spaces]]` for multi-word tags.
+The Markdown parser keeps them verbatim in `:text` and does not lift them into
+the IR `:tags` field, while org headline tags (`:tag:`) already map to
+`:tags`.  So today a Markdown `#tag` has no org-roam counterpart, and an
+org-roam heading tag does not come back as a Markdown `#tag`.
+
+**Goal.**  Round-trip block tags between the two spellings:
+
+- Logseq Markdown — `#tag` / `#[[multi-word tag]]` inline in the block text.
+- org-roam and Logseq `.org` — headline tags `:tag:` at the end of the heading.
+
+**Proposed approach (TODO, `logseq-org-sync-logseq-markdown--make-block`).**
+
+1. Markdown parser (`--parse-block-line` / `--make-block`): recognise `#tag`
+   and `#[[tag]]` in a block's first line and collect them into the block's
+   `:tags`.
+2. Markdown writer (`--format-block`): emit the block's `:tags` at the end of
+   the first line as `#tag` (or `#[[tag]]` for multi-word tags).
+3. org parser/writer need no change — they already use headline tags.
+
+A first cut may simply *preserve* `#tag` in `:text` (as today) and only add
+the org-roam → Markdown direction (append `:tags` to the end of the first line
+as `#tag`), leaving the Markdown → org-roam extraction for a second step.
+
+**Open decisions.**
+
+- *Strip vs preserve.*  Stripping `#tag` from `:text` when collecting `:tags`
+  makes the round-trip lossless and avoids duplication, but loses the inline
+  position (Logseq renders `#tag` as a page reference wherever it sits).
+  Preserving it keeps the Logseq text faithful but needs de-duplication so the
+  org-roam → Markdown step does not emit the same `#tag` twice.
+- *Position.*  Emitting `:tags` at the end of the first line moves a
+  mid-sentence `#tag` to the end.  Acceptable for v1, or remember the original
+  position?
+- *Multi-word tags.*  `#[[tag with spaces]]` must survive; org headline tags
+  cannot contain spaces (Logseq/org use underscores), so decide the org-side
+  spelling and the reverse mapping.
+- *Case.*  Logseq normalises tag case (lowercase page names); org tags are
+  case-sensitive.  Decide whether to normalise.
+- *Deduplication.*  If the same tag appears both as a literal `#tag` in
+  `:text` and in `:tags`, define who wins and ensure a single `#tag` on the
+  Markdown side.
+- *Page vs block tags.*  Keep block `:tags` separate from page-level node
+  `:tags` (`tags::` / `#+filetags:` already populate the node's `:tags`).
+  The block plist already has a `:tags` field for this purpose, but the
+  Markdown parser does not fill it yet.

@@ -85,5 +85,47 @@
             (should (= 1 (length (plist-get state :nodes))))))
       (delete-directory tmp t))))
 
+(ert-deftest logseq-org-sync--graph-entry ()
+  (should (equal
+           '(:name "Work" :logseq-root "/graphs/Work")
+           (logseq-org-sync--graph-entry "/graphs/Work")))
+  (should (equal
+           '(:name "work" :logseq-root "/graphs/Work")
+           (logseq-org-sync--graph-entry "/graphs/Work" "work"))))
+
+(ert-deftest logseq-org-sync--roam-root-for ()
+  (let ((logseq-org-sync-roam-directory "/roam"))
+    (should (equal "/roam/Work"
+                   (logseq-org-sync--roam-root-for
+                    '(:name "Work" :logseq-root "/graphs/Work"))))
+    (should (equal "/custom/Work"
+                   (logseq-org-sync--roam-root-for
+                    '(:name "Work" :roam-root "/custom/Work"))))))
+
+(ert-deftest logseq-org-sync--graph-add-remove ()
+  (let ((graphs (logseq-org-sync--graph-add
+                 nil (logseq-org-sync--graph-entry "/graphs/Work"))))
+    (should (equal '(:name "Work" :logseq-root "/graphs/Work") (car graphs)))
+    (should-error
+     (logseq-org-sync--graph-add graphs (logseq-org-sync--graph-entry "/graphs/Work"))))
+  (should (null (logseq-org-sync--graph-remove
+                 (list (logseq-org-sync--graph-entry "/graphs/Work"))
+                 "Work"))))
+
+(ert-deftest logseq-org-sync--resolve-derives-roam-root ()
+  (let ((logseq-org-sync-roam-directory "/roam"))
+    (should (equal "/roam/work"
+                   (plist-get (logseq-org-sync--resolve
+                               '(:name "work" :logseq-root "/graphs/Work"))
+                              :roam-root)))))
+
+(ert-deftest logseq-org-sync--graph-for-file-derived-roam-root ()
+  (let ((logseq-org-sync-roam-directory "/roam")
+        (logseq-org-sync-graphs
+         (list (logseq-org-sync--graph-entry "/graphs/Work"))))
+    (should (logseq-org-sync--graph-for-file "/graphs/Work/pages/Foo.org"))
+    (should (logseq-org-sync--graph-for-file "/roam/Work/pages/Foo.org"))
+    (should-not (logseq-org-sync--graph-for-file "/graphs/Work/config.edn"))))
+
 (provide 'logseq-org-sync-test)
 ;;; logseq-org-sync-test.el ends here

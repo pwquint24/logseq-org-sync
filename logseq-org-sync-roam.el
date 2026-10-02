@@ -70,8 +70,9 @@
 ;; - Fuzzy-link collection skips org-internal links (`[[#custom-id]]',
 ;;   `[[*heading]]'); image/asset links are not specially handled (deferred).
 ;; - Headline body content (paragraphs, `#+BEGIN_*' blocks, tables) is parsed
-;;   into the block's `:body' field and round-trips same-format; cross-format
-;;   body translation is still deferred (AGENTS.md §11.1/§11.2).
+;;   into the block's `:body' field and round-trips: byte-for-byte same-format,
+;;   and cross-format for fenced code blocks and Markdown tables via the
+;;   reconciler (AGENTS.md §11.1/§11.2).
 
 ;;; Code:
 

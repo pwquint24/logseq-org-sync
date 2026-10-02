@@ -24,8 +24,12 @@
 ;; together into the pieces a user actually invokes:
 ;;
 ;; - `logseq-org-sync'       — interactive command, one graph at a time.
+;; - `logseq-org-sync-here'  — sync the graph containing the current buffer.
 ;; - `logseq-org-sync-dry-run' — interactive preview, no writes.
 ;; - `logseq-org-sync-run'   — non-interactive sync (used by the hooks below).
+;; - `logseq-org-sync-all'   — non-interactive sync of every configured graph.
+;; - `logseq-org-sync-add-graph' / `logseq-org-sync-remove-graph' — manage
+;;   the `logseq-org-sync-graphs' list.
 ;; - `logseq-org-sync-after-save' — an `after-save-hook' function.
 ;; - `logseq-org-sync-watch' / `logseq-org-sync-unwatch' — file-notify
 ;;   watchers for changes made outside Emacs (e.g. by the Logseq app).
@@ -35,16 +39,17 @@
 ;; Graphs are declared in `logseq-org-sync-graphs' (AGENTS.md §2).  Each entry
 ;; is a plist:
 ;;
-;;     (:name "work"
-;;      :logseq-root "~/graphs/Work"
-;;      :roam-root "~/org-roam/Work"
-;;      :pages-directory "pages"          ; optional, default "pages"
-;;      :journals-directory "journals"    ; optional, default "journals"
-;;      :state-file "/path/to/work.plist") ; optional
+;;     (:name "Work"
+;;      :logseq-root "~/graphs/Work")
 ;;
-;; `:state-file' defaults to `<state-directory>/<name>.plist', where
-;; `<state-directory>' is `logseq-org-sync-state-directory' (under
-;; `user-emacs-directory' by default).
+;; `:roam-root' defaults to `<logseq-org-sync-roam-directory>/<name>'
+;; (`logseq-org-sync-roam-directory' defaults to `org-roam-directory' when
+;; org-roam is loaded), so adding a graph only requires picking its Logseq
+;; folder — the mirror subdirectory is derived automatically.
+;;
+;; Optional keys are `:roam-root', `:pages-directory' (default "pages"),
+;; `:journals-directory' (default "journals"), and `:state-file' (default
+;; `<logseq-org-sync-state-directory>/<name>.plist').
 ;;
 ;; ## Automatic sync
 ;;
@@ -80,13 +85,15 @@ Each entry is a plist with these keys:
 
   :name               string; unique identifier for the graph.
   :logseq-root        directory of the native Logseq graph.
-  :roam-root          directory of the org-roam mirror.
+  :roam-root          optional; org-roam mirror directory.
   :pages-directory    optional; subtree name (default \"pages\").
   :journals-directory optional; subtree name (default \"journals\").
   :state-file         optional; path to this graph's metadata store.
 
-When `:state-file' is omitted, it defaults to a file named after the
-graph under `logseq-org-sync-state-directory'."
+`:roam-root' defaults to `<logseq-org-sync-roam-directory>/<name>', so a
+graph added with `logseq-org-sync-add-graph' only needs `:name' and
+`:logseq-root'.  When `:state-file' is omitted, it defaults to a file
+named after the graph under `logseq-org-sync-state-directory'."
   :type '(repeat
           (plist :key-type symbol
                  :value-type string
@@ -96,6 +103,17 @@ graph under `logseq-org-sync-state-directory'."
                            (:pages-directory)
                            (:journals-directory)
                            (:state-file))))
+  :group 'logseq-org-sync-command)
+
+(defcustom logseq-org-sync-roam-directory
+  (or (and (boundp 'org-roam-directory) org-roam-directory)
+      (expand-file-name "org-roam" user-emacs-directory))
+  "Parent directory holding one mirror subdirectory per Logseq graph.
+A graph's `:roam-root' defaults to
+`<logseq-org-sync-roam-directory>/<graph name>'.  This defaults to
+`org-roam-directory' when org-roam is loaded, so the mirrors live inside
+the org-roam directory."
+  :type 'directory
   :group 'logseq-org-sync-command)
 
 (defcustom logseq-org-sync-state-directory
@@ -122,13 +140,48 @@ graph under `logseq-org-sync-state-directory'."
   (cl-find name logseq-org-sync-graphs
            :test (lambda (n graph) (equal n (plist-get graph :name)))))
 
+(defun logseq-org-sync--roam-root-for (graph)
+  "Return GRAPH's org-roam mirror directory, deriving it when absent.
+The default is `<logseq-org-sync-roam-directory>/<graph name>'."
+  (or (plist-get graph :roam-root)
+      (expand-file-name (plist-get graph :name)
+                        logseq-org-sync-roam-directory)))
+
+(defun logseq-org-sync--graph-entry (logseq-root &optional name)
+  "Return a graph plist for LOGSEQ-ROOT.
+NAME defaults to LOGSEQ-ROOT's basename; `:roam-root' is left unset so
+it stays derived from `logseq-org-sync-roam-directory'."
+  (let ((root (expand-file-name logseq-root)))
+    (list :name (or name
+                    (file-name-nondirectory (directory-file-name root)))
+          :logseq-root root)))
+
+(defun logseq-org-sync--graph-add (graphs graph)
+  "Return GRAPHS with GRAPH appended.
+Errors when a graph with the same `:name' is already present."
+  (let ((name (plist-get graph :name)))
+    (when (cl-find name graphs
+                   :test (lambda (n g) (equal n (plist-get g :name))))
+      (error "A graph named %S is already configured" name))
+    (append graphs (list graph))))
+
+(defun logseq-org-sync--graph-remove (graphs name)
+  "Return GRAPHS without the graph named NAME."
+  (cl-remove-if (lambda (graph) (equal name (plist-get graph :name)))
+                graphs))
+
 (defun logseq-org-sync--normalize-graph (graph)
-  "Return GRAPH with optional directory keys defaulted."
+  "Return GRAPH with optional directory keys defaulted.
+`:roam-root' is derived from `logseq-org-sync-roam-directory' when
+absent, so a configured graph only needs `:name' and `:logseq-root'."
   (let ((graph (copy-sequence graph)))
     (unless (plist-get graph :pages-directory)
       (setq graph (plist-put graph :pages-directory "pages")))
     (unless (plist-get graph :journals-directory)
       (setq graph (plist-put graph :journals-directory "journals")))
+    (unless (plist-get graph :roam-root)
+      (setq graph (plist-put graph :roam-root
+                             (logseq-org-sync--roam-root-for graph))))
     graph))
 
 (defun logseq-org-sync--resolve (graph)
@@ -204,13 +257,8 @@ Interactively, GRAPH is chosen from `logseq-org-sync-graphs'."
   (let ((state (logseq-org-sync--load-state graph)))
     (message "%s" (logseq-org-sync-safety-dry-run-text graph state))))
 
-;;;###autoload
-(defun logseq-org-sync (graph)
-  "Synchronize GRAPH between its Logseq and org-roam sides.
-Shows a dry-run preview and asks for confirmation before applying.
-Interactively, GRAPH is chosen from `logseq-org-sync-graphs'."
-  (interactive (list (logseq-org-sync--read-graph)))
-  (setq graph (logseq-org-sync--resolve graph))
+(defun logseq-org-sync--sync-interactive (graph)
+  "Run an interactive preview/confirm sync of resolved GRAPH."
   (let* ((state (logseq-org-sync--load-state graph))
          (plan (logseq-org-sync-reconcile-plan graph state)))
     (if (null plan)
@@ -221,6 +269,88 @@ Interactively, GRAPH is chosen from `logseq-org-sync-graphs'."
         (logseq-org-sync--apply-and-save graph state)
         (message "Logseq/org-roam sync of %S complete."
                  (plist-get graph :name))))))
+
+;;;###autoload
+(defun logseq-org-sync (graph)
+  "Synchronize GRAPH between its Logseq and org-roam sides.
+Shows a dry-run preview and asks for confirmation before applying.
+Interactively, GRAPH is chosen from `logseq-org-sync-graphs'."
+  (interactive (list (logseq-org-sync--read-graph)))
+  (logseq-org-sync--sync-interactive (logseq-org-sync--resolve graph)))
+
+;;;###autoload
+(defun logseq-org-sync-here ()
+  "Synchronize the graph containing the current buffer's file.
+The buffer may visit a note under either the Logseq side or the
+org-roam side of a configured graph.  Shows a dry-run preview and asks
+for confirmation before applying."
+  (interactive)
+  (if-let* ((file buffer-file-name)
+            (graph (logseq-org-sync--graph-for-file file)))
+      (logseq-org-sync--sync-interactive graph)
+    (message "Current buffer is not under a configured Logseq/org-roam graph")))
+
+;;;###autoload
+(defun logseq-org-sync-add-graph (&optional logseq-root name)
+  "Add a Logseq graph to `logseq-org-sync-graphs'.
+Interactively, LOGSEQ-ROOT is read with `read-directory-name'.  NAME
+defaults to LOGSEQ-ROOT's basename and the org-roam mirror to
+`<logseq-org-sync-roam-directory>/<name>'; both are created/derived
+automatically.  The value is saved via Customize."
+  (interactive (list (read-directory-name "Logseq graph folder: " nil nil t)))
+  (let* ((root (expand-file-name logseq-root))
+         (default-name (file-name-nondirectory (directory-file-name root)))
+         (name (or name
+                   (if (logseq-org-sync--find-graph default-name)
+                       (read-string
+                        (format "Graph name (default %S): " default-name)
+                        nil nil default-name)
+                     default-name)))
+         (graph (logseq-org-sync--graph-entry root name))
+         (roam-root (logseq-org-sync--roam-root-for graph))
+         (format (logseq-org-sync-logseq-graph-format root)))
+    (when (y-or-n-p
+           (format "Add graph %S (%s) with org-roam mirror %S? "
+                   name (or format 'unknown) roam-root))
+      (make-directory roam-root t)
+      (customize-save-variable
+       'logseq-org-sync-graphs
+       (logseq-org-sync--graph-add logseq-org-sync-graphs graph))
+      (message "Added Logseq graph %S" name))))
+
+;;;###autoload
+(defun logseq-org-sync-remove-graph (&optional name)
+  "Remove the graph named NAME from `logseq-org-sync-graphs'.
+Files on both sides are left in place; the graph simply stops being
+synced.  Active watchers for the graph are stopped."
+  (interactive
+   (list (when logseq-org-sync-graphs
+           (completing-read
+            "Remove graph: "
+            (mapcar (lambda (graph) (plist-get graph :name))
+                    logseq-org-sync-graphs)
+            nil t))))
+  (when name
+    (when (y-or-n-p
+           (format "Stop syncing graph %S (files are left in place)? " name))
+      (logseq-org-sync-unwatch name)
+      (customize-save-variable
+       'logseq-org-sync-graphs
+       (logseq-org-sync--graph-remove logseq-org-sync-graphs name))
+      (message "Removed graph %S" name))))
+
+;;;###autoload
+(defun logseq-org-sync-all ()
+  "Synchronize every graph in `logseq-org-sync-graphs'.
+Each graph is synced with the newest-wins policy, so this never prompts."
+  (interactive)
+  (if (null logseq-org-sync-graphs)
+      (message "No graphs configured; use `logseq-org-sync-add-graph'")
+    (let ((count 0))
+      (dolist (graph logseq-org-sync-graphs)
+        (logseq-org-sync-run graph)
+        (setq count (1+ count)))
+      (message "Synced %d graph(s)" count))))
 
 ;;; Automatic triggering
 
@@ -245,7 +375,7 @@ Interactively, GRAPH is chosen from `logseq-org-sync-graphs'."
 (defun logseq-org-sync--graph-for-file (file)
   "Return the configured graph containing note FILE, or nil."
   (cl-find-if (lambda (graph) (logseq-org-sync--note-file-p file graph))
-              logseq-org-sync-graphs))
+              (mapcar #'logseq-org-sync--resolve logseq-org-sync-graphs)))
 
 (defun logseq-org-sync-after-save ()
   "Sync the configured graph containing `buffer-file-name', if any.

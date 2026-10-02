@@ -174,8 +174,9 @@ From `logseq.graph-parser.property`:
   `{{embed ((uuid))}}` verbatim; the reconciler translates them cross-side
   (see `AGENTS.md` §6).
 - **Block body**: free text, tables, and `#+BEGIN_*` blocks under a heading are
-  parsed into the block's `:body` field and round-trip same-format;
-  cross-format body translation is still deferred (`AGENTS.md` §11.1/§11.2).
+  parsed into the block's `:body` field and round-trip: byte-for-byte
+  same-format, and cross-format for fenced code blocks and Markdown tables
+  via the reconciler (`AGENTS.md` §11.1/§11.2).
 - **mldoc org support is a subset of Org**, so constructs outside the
   `og/deps/graph-parser/src/logseq/graph_parser/schema/mldoc.cljc` AST are not
   guaranteed to round-trip through Logseq even if Emacs can parse them.
@@ -265,7 +266,8 @@ reconciler (see `AGENTS.md` §6).
 
 - A block round-trips its first line, TODO marker, `key:: value` block
   properties, `SCHEDULED:`/`DEADLINE:` lines, and its `:body` (tables, code
-  fences, and other multi-line block bodies) same-format.  Cross-format body
-  translation is still deferred (`AGENTS.md` §11.1/§11.2).
+  fences, and other multi-line block bodies): byte-for-byte same-format, and
+  cross-format for fenced code blocks and Markdown tables via the reconciler
+  (`AGENTS.md` §11.1/§11.2).
 - Markdown block tags (`#tag`) are preserved verbatim in block text; they are
   not translated into the IR `:tags` field.

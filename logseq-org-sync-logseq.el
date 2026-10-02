@@ -98,8 +98,9 @@
 ;; - Fuzzy-link collection skips org-internal links (`[[#custom-id]]',
 ;;   `[[*heading]]'); image/asset links are not specially handled (deferred).
 ;; - Headline body content (paragraphs, `#+BEGIN_*' blocks, tables) is parsed
-;;   into the block's `:body' field and round-trips same-format; cross-format
-;;   body translation is still deferred (AGENTS.md §11.1/§11.2).
+;;   into the block's `:body' field and round-trips: byte-for-byte same-format,
+;;   and cross-format for fenced code blocks and Markdown tables via the
+;;   reconciler (AGENTS.md §11.1/§11.2).
 ;;
 ;; ## Canonical Logseq Markdown format
 ;;
@@ -511,6 +512,9 @@ nil, and TEXT is the block text with markers removed."
 
 (defun logseq-org-sync-logseq-markdown--make-block (level heading todo text)
   "Return a block plist for LEVEL, HEADING, TODO and TEXT."
+  ;; TODO(block-tags): extract `#tag' / `#[[tag]]' from TEXT into the block's
+  ;; `:tags' field (and decide strip-vs-preserve in TEXT); the Markdown writer
+  ;; must then emit `:tags' back as `#tag'.  See AGENTS.md §11.3.
   (let ((block (list :level level)))
     (when todo (setq block (plist-put block :todo todo)))
     (when (and text (not (string-empty-p text)))
