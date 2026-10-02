@@ -1,0 +1,71 @@
+* State cache
+This document explains what the per-graph state file is for, what it
+stores, and what happens if it is deleted. It is the metadata store
+described in =AGENTS.md= §4 and implemented by
+=logseq-org-sync-state.el= (§9.10).
+
+** Purpose
+The state cache is a small, human-readable Lisp plist keyed by UUID. It
+stores *metadata only --- never content*.
+
+Per node it records:
+
+| Field                           | Purpose                                      |
+|---------------------------------+----------------------------------------------|
+| =:id=                           | shared UUID                                  |
+| =:roam-path=                    | last-known relative path in the org-roam dir |
+| =:logseq-path=                  | last-known relative path in the Logseq dir   |
+| =:roam-hash=                    | SHA-256 of the org-roam file at last sync    |
+| =:logseq-hash=                  | SHA-256 of the Logseq file at last sync      |
+| =:roam-mtime= / =:logseq-mtime= | last-sync mtimes                             |
+| =:title=                        | cached title                                 |
+| =:last-sync=                    | timestamp                                    |
+
+Content (file bodies, blocks, links, tags, timestamps) lives only in the
+actual =.org= / =.md= files. The state file is roughly 300--500 bytes
+per node.
+
+The cache is *not* used to locate files. Path discovery is deterministic
+from the two roots (1:1 mapping), so the engine can find every file even
+with an empty or missing state.
+
+It is used for three decisions:
+
+1. *Change detection* --- compare the current file hash against the
+   last-synced hash to decide whether a side was modified.
+2. *Rename detection* --- same content but a different path means the
+   file was renamed and the new name must be mirrored.
+3. *Deletion detection* --- a side is missing but the state says it
+   existed, so the surviving copy should be moved to trash.
+
+** Per-graph file
+Each graph has its own state file:
+
+- default: =<logseq-org-sync-state-directory>/<name>.plist=
+- or explicit: =:state-file= in the graph configuration
+
+So =work= and =personal= each get their own independent cache.
+
+** What happens if it is deleted or missing
+=logseq-org-sync-state-load= treats a missing or invalid file as an
+*empty state*. The next sync re-baselines and then saves a fresh state
+file at the end. This is non-destructive: deleting the cache never
+deletes or overwrites note content by itself.
+
+The behavior on the first run after deletion depends on what is on disk:
+
+| Situation                      | Result without state                                                                                                     |
+|--------------------------------+--------------------------------------------------------------------------------------------------------------------------|
+| File exists on *both* sides    | =seed= --- record a baseline and *write nothing*, even if the two sides differ.                                          |
+| File exists on *only one* side | Treated as =new= → the missing side is *created* from it.                                                                |
+| File was deleted on one side   | The deletion is *not* recognized as a deletion; instead the surviving copy is seen as =new= and the file is *recreated*. |
+| File was renamed on one side   | The rename is *not* recognized; both sides are seeded under their current (now differing) paths.                         |
+
+The main consequence is a brief “convergence by creation” window:
+deletions and renames that happened while the cache was absent are not
+mirrored as trash/rename, because the baseline needed to remember “this
+existed before” is gone. Once a fresh state is saved, normal
+change/rename/delete detection resumes.
+
+In short: *safe to delete, self-healing, but it loses the memory of what
+changed since the last sync* until a new baseline is written.

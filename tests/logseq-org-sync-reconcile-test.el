@@ -566,5 +566,46 @@ The temp directory is deleted afterwards."
                  (regexp-quote "| a | b |\n  | 1 | 2 |") text)))
       (should (null (logseq-org-sync-reconcile-plan graph state))))))
 
+(ert-deftest logseq-org-sync-reconcile--markdown-block-tag-propagates-to-roam ()
+  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
+                                                        (lroot :logseq-root)
+                                                        (rroot :roam-root))
+    (let ((state (logseq-org-sync-reconcile-test--baseline graph)))
+      (write-region "id:: 10000000-0000-0000-0000-000000000006\n\n- Do the thing #todo\n"
+                    nil (expand-file-name "pages/Tagged.md" lroot))
+      (let ((plan (logseq-org-sync-reconcile-plan graph state)))
+        (should (equal '(create-roam)
+                       (logseq-org-sync-reconcile-test--types plan)))
+        (setq state (logseq-org-sync-reconcile-apply graph state plan)))
+      (let ((text (with-temp-buffer
+                    (insert-file-contents (expand-file-name "pages/Tagged.org" rroot))
+                    (buffer-string))))
+        ;; The inline #tag became an org-roam headline tag.
+        (should (string-match-p (regexp-quote "* Do the thing :todo:") text))
+        (should-not (string-match-p "#todo" text)))
+      (should (null (logseq-org-sync-reconcile-plan graph state))))))
+
+(ert-deftest logseq-org-sync-reconcile--markdown-block-tag-propagates-to-logseq ()
+  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
+                                                        (lroot :logseq-root)
+                                                        (rroot :roam-root))
+    (let ((state (logseq-org-sync-reconcile-test--baseline graph)))
+      (write-region (concat ":PROPERTIES:\n"
+                            ":ID: 10000000-0000-0000-0000-000000000007\n"
+                            ":END:\n"
+                            "#+title: Tagged\n\n"
+                            "* Do the thing :todo:\n")
+                    nil (expand-file-name "pages/Tagged.org" rroot))
+      (let ((plan (logseq-org-sync-reconcile-plan graph state)))
+        (should (equal '(create-logseq)
+                       (logseq-org-sync-reconcile-test--types plan)))
+        (setq state (logseq-org-sync-reconcile-apply graph state plan)))
+      (let ((text (with-temp-buffer
+                    (insert-file-contents (expand-file-name "pages/Tagged.md" lroot))
+                    (buffer-string))))
+        ;; The org-roam headline tag became an inline Markdown #tag.
+        (should (string-match-p (regexp-quote "- Do the thing #todo") text)))
+      (should (null (logseq-org-sync-reconcile-plan graph state))))))
+
 (provide 'logseq-org-sync-reconcile-test)
 ;;; logseq-org-sync-reconcile-test.el ends here

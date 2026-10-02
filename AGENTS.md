@@ -576,9 +576,11 @@ A block is a plist with deterministic key order (nil keys omitted):
   formats verbatim.  A block keeps its first line (`:text`), TODO marker,
   `:tags`, block `:properties`, `SCHEDULED:`/`DEADLINE:` lines, `:body`, and
   `:children`.
-- Markdown block tags (`#tag`) are preserved verbatim in `:text` rather than
-  translated into the IR `:tags` field; org headline tags (`:tag:`) are parsed
-  into `:tags` normally.  Planned work: §11.3.
+- Markdown block tags (`#tag` / `#[[multi-word tag]]`) are stripped from the
+  block's first line into the IR `:tags` field (multi-word tags use the
+  underscore spelling org requires); the Markdown writer emits `:tags` back as
+  `#tag`.  org headline tags (`:tag:`) already map to `:tags` on both org
+  sides.  See §11.3.
 
 ### 9.9 Phase 3 module — `logseq-org-sync-roam.el`
 
@@ -889,9 +891,7 @@ scope below.
   org-roam side; v1 assumes no local assets or out-of-band asset sync.
 - Block bodies beyond the first line (tables, code fences, multi-line text)
   round-trip through `:body` (same-format byte-for-byte, plus cross-format
-  for fenced code blocks and Markdown tables); Markdown block tags (`#tag`)
-  are not translated into `:tags` (planned §11.3).  See §9.8, §11.1, and
-  §11.2.
+  for fenced code blocks and Markdown tables).  See §9.8, §11.1, and §11.2.
 - Live/continuous sync: Phase 7 provides an `after-save-hook` and
   `file-notify` watchers; richer or more robust continuous operation (e.g.
   finer-grained watch filtering, queueing) remains a future concern.
@@ -1009,52 +1009,41 @@ as body lines, and the org-roam parser/writer wraps/unwraps the
 - The canonical wrapped form preserves the delimiter row and alignment colons
   exactly; neither side normalizes the table text.
 
-### 11.3 Planned — Markdown block tags (`#tag`)
+### 11.3 Markdown block tags (`#tag`)
 
-**Current state.**  Logseq Markdown block tags are inline references in a
-block's first line: `#tag`, or `#[[tag with spaces]]` for multi-word tags.
-The Markdown parser keeps them verbatim in `:text` and does not lift them into
-the IR `:tags` field, while org headline tags (`:tag:`) already map to
-`:tags`.  So today a Markdown `#tag` has no org-roam counterpart, and an
-org-roam heading tag does not come back as a Markdown `#tag`.
+**Status.**  Implemented in the Markdown parser and writer
+(`logseq-org-sync-logseq-markdown--make-block` / `--format-block`).  The org
+sides (Logseq `.org` and org-roam) already read and write block `:tags` as
+headline tags, so no org-side change was needed.
 
-**Goal.**  Round-trip block tags between the two spellings:
+**Behavior.**
 
-- Logseq Markdown — `#tag` / `#[[multi-word tag]]` inline in the block text.
-- org-roam and Logseq `.org` — headline tags `:tag:` at the end of the heading.
+- Markdown parser: `#tag` and `#[[multi-word tag]]` in a block's first line
+  are *stripped* from `:text` and collected into the block's `:tags`.  A plain
+  `#tag` drops trailing sentence punctuation; a `#[[...]]` tag is normalized
+  to underscore spelling (`#[[next week]]` → `next_week`) because org headline
+  tags cannot contain whitespace.
+- Markdown writer: the block's `:tags` are emitted at the end of the first
+  line as `#tag` (in document order).
+- org-roam / Logseq `.org`: unchanged — `:tags` already round-trips as `:tag:`.
 
-**Proposed approach (TODO, `logseq-org-sync-logseq-markdown--make-block`).**
+**Decisions made.**
 
-1. Markdown parser (`--parse-block-line` / `--make-block`): recognise `#tag`
-   and `#[[tag]]` in a block's first line and collect them into the block's
-   `:tags`.
-2. Markdown writer (`--format-block`): emit the block's `:tags` at the end of
-   the first line as `#tag` (or `#[[tag]]` for multi-word tags).
-3. org parser/writer need no change — they already use headline tags.
+- *Strip* (not preserve): the tag leaves `:text` and lives only in `:tags`, so
+  the round-trip is lossless with no duplication.
+- *Position*: tags move to the end of the line (org's only headline-tag
+  position); the first sync canonicalizes this and later runs are no-ops.
+- *Multi-word spelling*: spaces normalize to `_`; the reverse maps an
+  underscore tag back to a single `#tag` word (spaces are not recovered).
+- *Case*: preserved verbatim on both sides (no lowercase normalization).
+- *Deduplication*: `:tags` is the single source of truth; nothing is re-added
+  to `:text`.
 
-A first cut may simply *preserve* `#tag` in `:text` (as today) and only add
-the org-roam → Markdown direction (append `:tags` to the end of the first line
-as `#tag`), leaving the Markdown → org-roam extraction for a second step.
+**Known limitations.**
 
-**Open decisions.**
-
-- *Strip vs preserve.*  Stripping `#tag` from `:text` when collecting `:tags`
-  makes the round-trip lossless and avoids duplication, but loses the inline
-  position (Logseq renders `#tag` as a page reference wherever it sits).
-  Preserving it keeps the Logseq text faithful but needs de-duplication so the
-  org-roam → Markdown step does not emit the same `#tag` twice.
-- *Position.*  Emitting `:tags` at the end of the first line moves a
-  mid-sentence `#tag` to the end.  Acceptable for v1, or remember the original
-  position?
-- *Multi-word tags.*  `#[[tag with spaces]]` must survive; org headline tags
-  cannot contain spaces (Logseq/org use underscores), so decide the org-side
-  spelling and the reverse mapping.
-- *Case.*  Logseq normalises tag case (lowercase page names); org tags are
-  case-sensitive.  Decide whether to normalise.
-- *Deduplication.*  If the same tag appears both as a literal `#tag` in
-  `:text` and in `:tags`, define who wins and ensure a single `#tag` on the
-  Markdown side.
-- *Page vs block tags.*  Keep block `:tags` separate from page-level node
-  `:tags` (`tags::` / `#+filetags:` already populate the node's `:tags`).
-  The block plist already has a `:tags` field for this purpose, but the
-  Markdown parser does not fill it yet.
+- org headline tags are more restrictive than Logseq tag text
+  (`[[:alnum:]_@#%]` only), so tags containing other characters (e.g. `+`,
+  `:`, apostrophes) may produce an invalid org tag.
+- A `#` inside a `[[...]]` page link is not protected from tag extraction.
+- Trailing sentence punctuation on a plain `#tag` (`#tag.`) is dropped rather
+  than kept as part of the tag.

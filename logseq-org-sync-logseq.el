@@ -118,9 +118,11 @@
 ;; Block properties and planning lines are continuation lines indented under
 ;; their block (`  key:: value', `  SCHEDULED: <...>').  Visual heading blocks
 ;; are recognized from `#'-prefixed text and stored as a `heading' block
-;; property, mirroring Logseq's org representation.  The Markdown parser uses
-;; the `markdown-inline' tree-sitter grammar for link extraction when it is
-;; available and falls back to a regexp otherwise.
+;; property, mirroring Logseq's org representation.  Inline block tags
+;; (`#tag' / `#[[multi-word tag]]') are stripped from the first line into the
+;; block's `:tags' field and re-emitted as `#tag' (AGENTS.md §11.3).  The
+;; Markdown parser uses the `markdown-inline' tree-sitter grammar for link
+;; extraction when it is available and falls back to a regexp otherwise.
 
 ;;; Code:
 
@@ -510,15 +512,70 @@ nil, and TEXT is the block text with markers removed."
         (list heading todo content)))
      (t (error "Not a Logseq Markdown block line: %S" line)))))
 
+(defconst logseq-org-sync-logseq-markdown--tag-regexp
+  "#\\[\\[\\([^][]*\\)\\]\\]\\|#\\([[:alnum:]_][^][[:space:]#]*\\)"
+  "Regexp matching a Logseq Markdown block tag in a block's first line.
+Group 1 matches a `#[[...]]' tag (whose inner text may contain spaces);
+group 2 matches a plain `#tag' word.  The first character of a plain tag
+must be alphanumeric or `_', so org directives like `#+BEGIN_TIP' are
+not mistaken for tags.")
+
+(defun logseq-org-sync-logseq-markdown--tag-org-spelling (tag)
+  "Return TAG with whitespace runs replaced by underscores.
+org headline tags cannot contain whitespace, so a multi-word Logseq tag
+uses the underscore spelling on the org/org-roam side (AGENTS.md §11.3)."
+  (let ((tag (string-trim tag)))
+    (replace-regexp-in-string "[[:space:]]+" "_" tag)))
+
+(defun logseq-org-sync-logseq-markdown--collapse-space (text)
+  "Return TEXT with runs of spaces/tabs collapsed to single spaces and trimmed."
+  (string-trim (replace-regexp-in-string "[ \t]+" " " text)))
+
+(defun logseq-org-sync-logseq-markdown--strip-tags (text)
+  "Return a cons (TEXT . TAGS) with Logseq block tags removed from TEXT.
+TAGS is a list of tag strings in document order: a `#[[...]]' tag keeps
+its inner text (normalized to underscore spelling), and a plain `#tag'
+word has trailing sentence punctuation dropped.  Each removed tag leaves
+the surrounding words joined by a single space; TEXT is collapsed and
+trimmed only when a tag was actually removed, so tag-free text is
+returned unchanged."
+  (let ((tags nil) (removed-p nil) (start 0))
+    (save-match-data
+      (while (and text
+                  (string-match logseq-org-sync-logseq-markdown--tag-regexp
+                                text start))
+        (let ((multi (match-string 1 text))
+              (word (match-string 2 text)))
+          (when multi
+            (push (logseq-org-sync-logseq-markdown--tag-org-spelling multi) tags))
+          (when word
+            (setq word (replace-regexp-in-string "[][(){}.,;:!?]+\\'" "" word))
+            (unless (string-empty-p word)
+              (push word tags))))
+        (setq removed-p t)
+        (setq text (concat (substring text 0 (match-beginning 0))
+                           (substring text (match-end 0))))
+        (setq start (match-beginning 0))))
+    (when removed-p
+      (setq text (logseq-org-sync-logseq-markdown--collapse-space text)))
+    (cons text (nreverse tags))))
+
 (defun logseq-org-sync-logseq-markdown--make-block (level heading todo text)
-  "Return a block plist for LEVEL, HEADING, TODO and TEXT."
-  ;; TODO(block-tags): extract `#tag' / `#[[tag]]' from TEXT into the block's
-  ;; `:tags' field (and decide strip-vs-preserve in TEXT); the Markdown writer
-  ;; must then emit `:tags' back as `#tag'.  See AGENTS.md §11.3.
-  (let ((block (list :level level)))
+  "Return a block plist for LEVEL, HEADING, TODO and TEXT.
+Inline Logseq block tags (`#tag' and `#[[multi-word tag]]') are stripped
+from TEXT and collected into the block's `:tags' field, so they
+round-trip as org headline tags on the org/org-roam side (AGENTS.md
+§11.3)."
+  (let ((block (list :level level))
+        (tags nil))
+    (when (and text (not (string-empty-p text)))
+      (let ((stripped (logseq-org-sync-logseq-markdown--strip-tags text)))
+        (setq text (car stripped)
+              tags (cdr stripped))))
     (when todo (setq block (plist-put block :todo todo)))
     (when (and text (not (string-empty-p text)))
       (setq block (plist-put block :text text)))
+    (when tags (setq block (plist-put block :tags tags)))
     (when heading
       (setq block (plist-put block :properties
                              (list (cons "heading" (number-to-string heading))))))
@@ -787,13 +844,15 @@ The fallback node `:title' is derived from FILE's name base."
       (let ((n (string-to-number (cdr prop))))
         (and (> n 0) n)))))
 
-(defun logseq-org-sync-logseq-markdown--block-line (level todo text heading)
-  "Format a Markdown block first line from LEVEL, TODO, TEXT and HEADING."
+(defun logseq-org-sync-logseq-markdown--block-line (level todo text heading tags)
+  "Format a Markdown block first line from LEVEL, TODO, TEXT, HEADING and TAGS.
+TAGS are emitted as inline `#tag' references after TEXT (AGENTS.md §11.3)."
   (let* ((indent (make-string (1- level) ?\t))
          (parts nil))
     (when todo (push todo parts))
     (when heading (push (make-string heading ?#) parts))
     (when (and text (not (string-empty-p text))) (push text parts))
+    (dolist (tag tags) (push (concat "#" tag) parts))
     (setq parts (nreverse parts))
     (if parts
         (concat indent "- " (mapconcat #'identity parts " "))
@@ -808,6 +867,7 @@ The fallback node `:title' is derived from FILE's name base."
   (let* ((level (or (plist-get block :level) 1))
          (todo (plist-get block :todo))
          (text (plist-get block :text))
+         (tags (plist-get block :tags))
          (props (plist-get block :properties))
          (heading (logseq-org-sync-logseq-markdown--heading-level props))
          (props (cl-remove-if (lambda (p) (string= (downcase (car p)) "heading"))
@@ -818,7 +878,7 @@ The fallback node `:title' is derived from FILE's name base."
          (body (plist-get block :body))
          (cindent (logseq-org-sync-logseq-markdown--continuation-indent level))
          (lines (list (logseq-org-sync-logseq-markdown--block-line
-                       level todo text heading))))
+                       level todo text heading tags))))
     (when scheduled
       (setq lines (append lines (list (concat cindent "SCHEDULED: " scheduled)))))
     (when deadline

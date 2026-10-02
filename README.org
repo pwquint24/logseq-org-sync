@@ -153,6 +153,7 @@ translates links and block references for the target side.
 | Title          | filename; =#+title:=     | filename; =title::=      | =#+title:=                       |
 | Aliases        | =#+alias: a, b=          | =alias:: a, b=           | =:ROAM_ALIASES: "a" "b"=         |
 | Page tags      | =#+tags:= / =#+filetags:=| =tags:: a, b=            | =#+filetags: :a:b:=              |
+| Block tags     | heading =:tag:=          | =#tag= / =#[[multi-word]]= | heading =:tag:=                |
 | Page link      | =[[Title]]=              | =[[Title]]= / =[t]([[Title]])= | =[[id:uuid][Title]]=       |
 | Block ref      | =((uuid))=               | =((uuid))=               | =[[id:uuid][block text]]=        |
 | Block embed    | ={{embed ((uuid))}}=     | ={{embed ((uuid))}}=     | =[[id:uuid][#embed block text]]= |
@@ -161,13 +162,13 @@ translates links and block references for the target side.
 | Dates          | =SCHEDULED:= /=DEADLINE:=| =SCHEDULED:= /=DEADLINE:=| org timestamps                   |
 | Block body     | section body             | indented continuation     | section body                     |
 
-**Identity**
+*Identity*
 
 The shared UUID is the one thing that ties a note together across the two
 sides.  New IDs come from ~org-id-new~, the same generator org-roam uses for
 new nodes, so generated IDs stay in org-roam's namespace.
 
-**Links**
+*Links*
 
 The sync translates links in both directions through the UUID map:
 
@@ -177,7 +178,7 @@ The sync translates links in both directions through the UUID map:
 Dead =[[Title]]= links stay fuzzy on the org-roam side; ambiguous titles are
 left un-converted on both sides.  Non-page links (=file:=, URLs) pass through.
 
-**Block references and embeds**
+*Block references and embeds*
 
 Logseq block references =((uuid))= and embeds ={{embed ((uuid))}}= are matched
 to org-roam =[[id:uuid][...]]= links.  An embed is distinguished on the
@@ -186,7 +187,16 @@ org-roam side by the =#embed= description prefix
 org-roam heading =:ID:=, and the reverse mapping restores the =((uuid))= /
 ={{embed ((uuid))}}= spelling.
 
-**Block bodies**
+*Block tags*
+
+A block's tags round-trip between the Markdown spelling (=#tag= /
+=#[[multi-word tag]]=) and the org spelling (=:tag:= at the end of the
+heading).  The Markdown parser strips =#tag= from the block's first line into
+the block's =:tags= field, and the writer re-emits it as =#tag=.  A multi-word
+tag uses the underscore spelling on the org side (=#[[next week]]= →
+=next_week=) because org headline tags cannot contain whitespace.
+
+*Block bodies*
 
 Block bodies (paragraphs, tables, code fences, quotes) round-trip byte-for-byte
 *within the same format* (=.org ↔ .org= and Markdown ↔ Markdown).  Across
@@ -290,7 +300,7 @@ last sync* until a fresh baseline is written.  A more detailed breakdown is in
 
 * Setup gotchas
 
-**org-roam**
+*org-roam*
 
 - The sync *hand-writes* org-roam files rather than using
   ~org-roam-capture-~.  Files created this way are not in org-roam's database
@@ -301,7 +311,7 @@ last sync* until a fresh baseline is written.  A more detailed breakdown is in
   ~org-roam-directory~ (or ~logseq-org-sync-roam-directory~) *before* adding
   graphs.
 
-**org-roam-dailies**
+*org-roam-dailies*
 
 - org-roam has one global ~org-roam-dailies-directory~; it has no notion of a
   per-graph =journals/= subtree.  This sync does *not* use org-roam's dailies
@@ -309,7 +319,7 @@ last sync* until a fresh baseline is written.  A more detailed breakdown is in
   treats journals as ordinary files.  Do not expect org-roam's dailies capture
   to target these synced journals automatically.
 
-**Logseq**
+*Logseq*
 
 - Format is decided by =:preferred-format "Org"= in =config.edn=.  A commented
   or absent setting means Markdown.  Make sure this matches what the graph
@@ -321,12 +331,13 @@ last sync* until a fresh baseline is written.  A more detailed breakdown is in
   synced.  Local asset links (=../assets/…=) are therefore broken on the
   org-roam side.
 
-**General limitations**
+*General limitations*
 
 - Priority cookies (=[#A]=) are not supported (org-element drops the text before
   a priority cookie).
-- Markdown block tags (=#tag= in block text) are preserved verbatim rather than
-  translated into the =:tags= field.
+- Markdown block tags (=#tag= / =#[[multi-word tag]]= in block text) are
+  stripped into the =:tags= field and round-trip as org headline tags; a
+  multi-word tag uses the underscore spelling.
 - Cross-format body translation covers code blocks and Markdown tables only;
   other body constructs cross formats verbatim.
 

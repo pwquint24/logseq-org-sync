@@ -380,5 +380,43 @@ A quoted body line.
                      (logseq-org-sync-logseq-markdown-format
                       (logseq-org-sync-logseq-markdown-parse-buffer "Page")))))))
 
+(ert-deftest logseq-org-sync-logseq--markdown-block-tags-strip ()
+  (let ((text "- Do the thing #todo #[[next week]]\n"))
+    (with-temp-buffer
+      (insert text)
+      (should (equal
+               '(:title "Page"
+                 :content ((:level 1 :text "Do the thing"
+                            :tags ("todo" "next_week"))))
+               (logseq-org-sync-logseq-markdown-parse-buffer "Page"))))))
+
+(ert-deftest logseq-org-sync-logseq--markdown-block-tags-punctuation ()
+  (let ((text "- Check #todo.\n"))
+    (with-temp-buffer
+      (insert text)
+      (should (equal
+               '(:title "Page"
+                 :content ((:level 1 :text "Check"
+                            :tags ("todo"))))
+               (logseq-org-sync-logseq-markdown-parse-buffer "Page"))))))
+
+(ert-deftest logseq-org-sync-logseq--markdown-block-tags-leading ()
+  (let ((text "- #todo Do the thing\n"))
+    (with-temp-buffer
+      (insert text)
+      (should (equal
+               '(:title "Page"
+                 :content ((:level 1 :text "Do the thing"
+                            :tags ("todo"))))
+               (logseq-org-sync-logseq-markdown-parse-buffer "Page"))))))
+
+(ert-deftest logseq-org-sync-logseq--markdown-block-tags-round-trip ()
+  (let ((text "- Do the thing #todo\n"))
+    (with-temp-buffer
+      (insert text)
+      (should (equal text
+                     (logseq-org-sync-logseq-markdown-format
+                      (logseq-org-sync-logseq-markdown-parse-buffer "Page")))))))
+
 (provide 'logseq-org-sync-logseq-test)
 ;;; logseq-org-sync-logseq-test.el ends here
