@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - private
 
 jobs:
   test:
@@ -27,4 +28,42 @@ jobs:
       - uses: leotaku/elisp-check@master
         with:
           check: melpa
-          file: logseq-org-roam.el
+          file: logseq-org-sync.el
+
+  # The legacy one-way converter lives under legacy/ and is only present on
+  # the private branch.  This job is skipped when legacy/ is absent (public
+  # main), so the workflow is valid on both branches.
+  legacy:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        emacs_version:
+          - 27.2
+          - 28.1
+          - 28.2
+          - 29.1
+          - 29.2
+          - snapshot
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect legacy converter
+        id: detect
+        run: |
+          if [ -d legacy ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: purcell/setup-emacs@master
+        if: steps.detect.outputs.present == 'true'
+        with:
+          version: ${{ matrix.emacs_version }}
+      - name: Test legacy converter
+        if: steps.detect.outputs.present == 'true'
+        run: make -C legacy test
+      - uses: leotaku/elisp-check@master
+        if: steps.detect.outputs.present == 'true'
+        with:
+          check: melpa
+          file: legacy/logseq-org-roam.el

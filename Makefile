@@ -1,19 +1,12 @@
 .POSIX:
 .PHONY: all compile test clean purge
 .SUFFIXES: .el .elc
-.INTERMEDIATE: make-readme-markdown.el
 
 RM = rm -f
 EMACS = emacs
 
-# Layout: the legacy one-way converter lives under legacy/, tests under tests/.
-LEGACY_DIR = legacy
+# Layout: the sync engine modules live at the root, tests under tests/.
 TESTS_DIR = tests
-
-LISP = logseq-org-roam
-SRC = $(LEGACY_DIR)/$(LISP).el
-TESTS = $(LEGACY_DIR)/$(LISP)-test.el
-BYTEC = $(SRC)c
 
 SYNC_LISP = logseq-org-sync-logseq
 SYNC_SRC = $(SYNC_LISP).el
@@ -50,6 +43,15 @@ SYNC_CMD_SRC = $(SYNC_CMD_LISP).el
 SYNC_CMD_TESTS = $(TESTS_DIR)/$(SYNC_CMD_LISP)-test.el
 SYNC_CMD_BYTEC = $(SYNC_CMD_SRC)c
 
+# All modules that make up the sync engine.
+SYNC_BYTECS = $(SYNC_BYTEC) $(SYNC_ROAM_BYTEC) $(SYNC_ID_BYTEC) \
+	      $(SYNC_STATE_BYTEC) $(SYNC_REC_BYTEC) \
+	      $(SYNC_SAFETY_BYTEC) $(SYNC_CMD_BYTEC)
+
+SYNC_TEST_FILES = $(SYNC_TESTS) $(SYNC_ROAM_TESTS) $(SYNC_ID_TESTS) \
+		  $(SYNC_STATE_TESTS) $(SYNC_REC_TESTS) \
+		  $(SYNC_SAFETY_TESTS) $(SYNC_CMD_TESTS)
+
 # Should pull the following dependencies:
 REQS := org-roam mocker
 
@@ -73,38 +75,24 @@ INIT_PACKAGE_EL := "(progn \
 
 BATCH = $(EMACS) -Q --batch --eval $(INIT_PACKAGE_EL)
 
-# Load path must resolve the sync modules at the root and the legacy modules
-# under legacy/.
-LOAD_PATH = -L . -L $(LEGACY_DIR)
+# The sync modules live at the root; tests are resolved from there too.
+LOAD_PATH = -L .
 
 all: compile
 
-compile: $(BYTEC) $(SYNC_BYTEC) $(SYNC_ROAM_BYTEC) $(SYNC_ID_BYTEC) $(SYNC_STATE_BYTEC) $(SYNC_REC_BYTEC) $(SYNC_SAFETY_BYTEC) $(SYNC_CMD_BYTEC)
+compile: $(SYNC_BYTECS)
 
-test: $(BYTEC) $(SYNC_BYTEC) $(SYNC_ROAM_BYTEC) $(SYNC_ID_BYTEC) $(SYNC_STATE_BYTEC) $(SYNC_REC_BYTEC) $(SYNC_SAFETY_BYTEC) $(SYNC_CMD_BYTEC)
+test: $(SYNC_BYTECS)
 	$(BATCH) \
 		$(LOAD_PATH) \
-		-l $(TESTS) \
-		-l $(SYNC_TESTS) \
-		-l $(SYNC_ROAM_TESTS) \
-		-l $(SYNC_ID_TESTS) \
-		-l $(SYNC_STATE_TESTS) \
-		-l $(SYNC_REC_TESTS) \
-		-l $(SYNC_SAFETY_TESTS) \
-		-l $(SYNC_CMD_TESTS) \
+		$(SYNC_TEST_FILES:%= -l %) \
 		-f ert-run-tests-batch-and-exit
 
 purge: clean
 	$(RM) -r $(PKGCACHE)
 
 clean:
-	$(RM) $(BYTEC) $(SYNC_BYTEC) $(SYNC_ROAM_BYTEC) $(SYNC_ID_BYTEC) $(SYNC_STATE_BYTEC) $(SYNC_REC_BYTEC) $(SYNC_SAFETY_BYTEC)
-
-legacy/README.md: make-readme-markdown.el $(SRC)
-	$(EMACS) -Q --script $< <$(SRC) >$@
-
-make-readme-markdown.el:
-	curl -L -o $@ https://raw.github.com/mgalgs/make-readme-markdown/master/make-readme-markdown.el
+	$(RM) $(SYNC_BYTECS)
 
 .el.elc:
 	@echo "Compiling $<"
