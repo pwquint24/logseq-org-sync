@@ -87,12 +87,10 @@ org-roam side).
 
 *Per-graph keys* (all optional except ~:name~ and ~:logseq-root~):
 
-| Key                   | Default                                         |
-|-----------------------+-------------------------------------------------|
-| ~:roam-root~          | =<logseq-org-sync-roam-directory>/<name>=       |
-| ~:pages-directory~    | =pages=                                         |
-| ~:journals-directory~ | =journals=                                      |
-| ~:state-file~         | =<logseq-org-sync-state-directory>/<name>.plist= |
+- ~:roam-root~ defaults to =<logseq-org-sync-roam-directory>/<name>=.
+- ~:pages-directory~ defaults to =pages=.
+- ~:journals-directory~ defaults to =journals=.
+- ~:state-file~ defaults to =<logseq-org-sync-state-directory>/<name>.plist=.
 
 *Format detection*
 
@@ -103,18 +101,23 @@ graph uses =.org= files; otherwise it uses =.md=.  The org-roam side is always
 
 * Commands
 
-| Command                         | What it does                                                         |
-|---------------------------------+----------------------------------------------------------------------|
-| ~logseq-org-sync~               | Choose a graph; show a dry-run preview; ask before applying.         |
-| ~logseq-org-sync-here~          | Sync the graph containing the current buffer's file (either side).   |
-| ~logseq-org-sync-dry-run~       | Preview a graph's plan without writing anything.                     |
-| ~logseq-org-sync-run~           | Non-interactive sync; forces newest-wins so it never prompts.        |
-| ~logseq-org-sync-all~           | Non-interactive sync of every configured graph.                      |
-| ~logseq-org-sync-add-graph~     | Pick a Logseq folder; derive name + mirror; save the config.         |
-| ~logseq-org-sync-remove-graph~  | Choose a graph; stop syncing it (files are left in place).           |
-| ~logseq-org-sync-watch~         | Watch a graph for external changes and re-sync (debounced).          |
-| ~logseq-org-sync-unwatch~       | Stop watching a graph (or all graphs).                               |
-| ~logseq-org-sync-after-save~    | ~after-save-hook~ function: sync the graph of the saved file.        |
+- ~logseq-org-sync~ chooses a graph, shows a dry-run preview, and asks before
+  applying.
+- ~logseq-org-sync-here~ syncs the graph containing the current buffer's file
+  (on either side).
+- ~logseq-org-sync-dry-run~ previews a graph's plan without writing anything.
+- ~logseq-org-sync-run~ is a non-interactive sync; it forces newest-wins so it
+  never prompts.
+- ~logseq-org-sync-all~ non-interactively syncs every configured graph.
+- ~logseq-org-sync-add-graph~ picks a Logseq folder, derives the name and
+  mirror, and saves the config.
+- ~logseq-org-sync-remove-graph~ chooses a graph and stops syncing it (files
+  are left in place).
+- ~logseq-org-sync-watch~ watches a graph for external changes and re-syncs
+  (debounced).
+- ~logseq-org-sync-unwatch~ stops watching a graph (or all graphs).
+- ~logseq-org-sync-after-save~ is an ~after-save-hook~ function that syncs the
+  graph of the saved file.
 
 ~logseq-org-sync-here~ and ~logseq-org-sync-after-save~ both match the current
 file against every configured graph's ~pages/~ and ~journals/~ subtrees, on
@@ -146,20 +149,34 @@ translates links and block references for the target side.
 
 * Element translation
 
-| Concern        | Logseq =.org=              | Logseq Markdown            | org-roam =.org=                  |
-|----------------+----------------------------+----------------------------+----------------------------------|
-| Identity       | =#+id: <uuid>=             | =id:: <uuid>=              | =:ID: <uuid>=                    |
-| Title          | filename; =#+title:=       | filename; =title::=        | =#+title:=                       |
-| Aliases        | =#+alias: a, b=            | =alias:: a, b=             | =:ROAM_ALIASES:= ~"a" "b"~       |
-| Page tags      | =#+tags:= / =#+filetags:=  | =tags:: a, b=              | =#+filetags: :a:b:=              |
-| Block tags     | heading =:tag:=            | =#tag= / =#[[multi-word]]= | heading =:tag:=                  |
-| Page link      | =[[Title]]=                | =[[Title]]= / =[t]([[Title]])= | =[[id:uuid][Title]]=         |
-| Block ref      | =((uuid))=                 | =((uuid))=                 | =[[id:uuid][block text]]=        |
-| Block embed    | ={{embed ((uuid))}}=       | ={{embed ((uuid))}}=       | =[[id:uuid][#embed block text]]= |
-| Structure      | headlines                  | indented list items        | headings / document              |
-| TODO           | Org TODO keywords          | =TODO=/=DOING=/=DONE=…      | Org TODO keywords                |
-| Dates          | =SCHEDULED:= / =DEADLINE:= | =SCHEDULED:= / =DEADLINE:= | org timestamps                   |
-| Block body     | section body               | indented continuation      | section body                     |
+- Identity is =#+id: <uuid>= in Logseq =.org=, =id:: <uuid>= in Logseq
+  Markdown, and =:ID: <uuid>= in org-roam =.org=.
+- Title comes from the filename (overridden by =#+title:=) in Logseq =.org=,
+  from the filename (overridden by =title::=) in Logseq Markdown, and from
+  =#+title:= in org-roam =.org=.
+- Aliases are =#+alias: a, b= in Logseq =.org=, =alias:: a, b= in Logseq
+  Markdown, and =:ROAM_ALIASES:= ~"a" "b"~ in org-roam =.org=.
+- Page tags are =#+tags:= / =#+filetags:= in Logseq =.org=, =tags:: a, b= in
+  Logseq Markdown, and =#+filetags: :a:b:= in org-roam =.org=.
+- Block tags are a heading =:tag:= in Logseq =.org=, =#tag= /
+  =#[[multi-word]]= in Logseq Markdown, and a heading =:tag:= in org-roam
+  =.org=.
+- Page links are =[[Title]]= in Logseq =.org=, =[[Title]]= /
+  =[t]([[Title]])= in Logseq Markdown, and =[[id:uuid][Title]]= in org-roam
+  =.org=.
+- Block references are =((uuid))= in Logseq =.org= and Logseq Markdown, and
+  =[[id:uuid][block text]]= in org-roam =.org=.
+- Block embeds are ={{embed ((uuid))}}= in Logseq =.org= and Logseq Markdown,
+  and =[[id:uuid][#embed block text]]= in org-roam =.org=.
+- Structure is headlines in Logseq =.org=, indented list items in Logseq
+  Markdown, and headings / document in org-roam =.org=.
+- TODO states are Org TODO keywords in Logseq =.org=,
+  =TODO=/=DOING=/=DONE=… in Logseq Markdown, and Org TODO keywords in
+  org-roam =.org=.
+- Dates are =SCHEDULED:= / =DEADLINE:= in Logseq =.org= and Logseq Markdown,
+  and org timestamps in org-roam =.org=.
+- Block body is the section body in Logseq =.org=, indented continuation in
+  Logseq Markdown, and the section body in org-roam =.org=.
 
 *Identity*
 
@@ -272,12 +289,14 @@ To regenerate it:
 
 On the first run after deletion:
 
-| Situation                          | Result                                                     |
-|------------------------------------+------------------------------------------------------------|
-| File exists on *both* sides        | =seed= — record a baseline, write nothing.                 |
-| File exists on *only one* side     | Treated as =new= — the missing side is created.            |
-| File was deleted on one side       | Not seen as a deletion; the survivor is recreated instead. |
-| File was renamed on one side       | Not seen as a rename; both sides seed under current paths. |
+- If a file exists on *both* sides, it is =seed=ed: a baseline is recorded and
+  nothing is written.
+- If a file exists on *only one* side, it is treated as =new= and the missing
+  side is created.
+- If a file was deleted on one side, it is not seen as a deletion; the
+  survivor is recreated instead.
+- If a file was renamed on one side, it is not seen as a rename; both sides
+  seed under the current paths.
 
 In short: *safe to delete, self-healing, but it forgets what changed since the
 last sync* until a fresh baseline is written.  A more detailed breakdown is in
