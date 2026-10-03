@@ -1,5 +1,4 @@
-#+TITLE: logseq-org-sync
-#+AUTHOR: Peter Quint
+#+#+AUTHOR: Peter Quint
 
 * logseq-org-sync is a two-way sync between a [[https://logseq.com][Logseq]] graph (=.org= or
 =.md=) and an [[https://www.orgroam.com][org-roam]] directory, written in Emacs Lisp.  Changes made on
@@ -8,6 +7,8 @@ every note keeps one stable identity on both sides.
 
 The full architecture is in AGENTS.md; the on-disk formats are in
 LOGSEQ-FORMAT.org and ORG-ROAM-FORMAT.org.
+
+The whole thing is vibe coded using deepseek and ECA
 
 * TL;DR
 
