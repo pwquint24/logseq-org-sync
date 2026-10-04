@@ -356,6 +356,56 @@ The temp directory is deleted afterwards."
       (should-not (file-exists-p (expand-file-name "pages/Fresh.org" lroot)))
       (should (null (logseq-org-sync-reconcile-plan graph state))))))
 
+(ert-deftest logseq-org-sync-reconcile--drops-empty-blocks ()
+  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
+                                                        (lroot :logseq-root)
+                                                        (rroot :roam-root))
+    (let ((logseq-org-sync-drop-empty-blocks t)
+          (state (logseq-org-sync-reconcile-test--baseline graph)))
+      (write-region (concat "id:: 10000000-0000-0000-0000-000000000008\n\n"
+                            "- Parent\n"
+                            "\t- \n"
+                            "\t- Child\n")
+                    nil (expand-file-name "pages/Empty.md" lroot))
+      (let ((plan (logseq-org-sync-reconcile-plan graph state)))
+        (should (equal '(create-roam)
+                       (logseq-org-sync-reconcile-test--types plan)))
+        (setq state (logseq-org-sync-reconcile-apply graph state plan)))
+      (let ((text (with-temp-buffer
+                    (insert-file-contents
+                     (expand-file-name "pages/Empty.org" rroot))
+                    (buffer-string))))
+        (should (string-match-p (regexp-quote "* Parent") text))
+        (should (string-match-p (regexp-quote "** Child") text))
+        ;; The empty bullet must not become an empty org headline.
+        (should-not (string-match-p "^\\*+[ \t]*$" text)))
+      (should (null (logseq-org-sync-reconcile-plan graph state))))))
+
+(ert-deftest logseq-org-sync-reconcile--keeps-empty-blocks-when-configured ()
+  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
+                                                        (lroot :logseq-root)
+                                                        (rroot :roam-root))
+    (let ((logseq-org-sync-drop-empty-blocks nil)
+          (state (logseq-org-sync-reconcile-test--baseline graph)))
+      (write-region (concat "id:: 10000000-0000-0000-0000-000000000008\n\n"
+                            "- Parent\n"
+                            "\t- \n"
+                            "\t- Child\n")
+                    nil (expand-file-name "pages/Empty.md" lroot))
+      (let ((plan (logseq-org-sync-reconcile-plan graph state)))
+        (should (equal '(create-roam)
+                       (logseq-org-sync-reconcile-test--types plan)))
+        (setq state (logseq-org-sync-reconcile-apply graph state plan)))
+      (let ((text (with-temp-buffer
+                    (insert-file-contents
+                     (expand-file-name "pages/Empty.org" rroot))
+                    (buffer-string))))
+        (should (string-match-p (regexp-quote "* Parent") text))
+        (should (string-match-p (regexp-quote "** Child") text))
+        ;; With dropping disabled, the empty block survives as `** '.
+        (should (string-match-p "^\\*\\*[ \t]*$" text)))
+      (should (null (logseq-org-sync-reconcile-plan graph state))))))
+
 (defconst logseq-org-sync-reconcile-test--block-uuid
   "11111111-1111-1111-1111-111111111111"
   "UUID used to exercise block reference translation.")

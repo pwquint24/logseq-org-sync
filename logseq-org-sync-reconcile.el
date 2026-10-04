@@ -162,6 +162,16 @@ a plain `((UUID))' block reference (AGENTS.md §6)."
   :type 'string
   :group 'logseq-org-sync)
 
+(defcustom logseq-org-sync-drop-empty-blocks t
+  "When non-nil, drop truly empty blocks before writing a synced note.
+An empty block has no text, todo keyword, tags, properties, planning
+lines, body, or children.  Empty Logseq bullets (`-` with no text) are
+otherwise mirrored as empty org headlines (`* `), which is lossless but
+noisy.  Dropping them keeps the org-roam mirror clean at the cost of not
+preserving empty placeholder bullets."
+  :type 'boolean
+  :group 'logseq-org-sync)
+
 (defun logseq-org-sync-reconcile--prompt-default (_id _logseq _roam)
   "Default conflict prompt.
 Ask the user which side to keep and return `logseq' or `roam'."
@@ -720,6 +730,56 @@ markdown' body holding a pipe table is unwrapped to a native table
   (logseq-org-sync-reconcile--node-bodies
    node #'logseq-org-sync-reconcile--roam-block-to-logseq))
 
+(defun logseq-org-sync-reconcile--plist-without (plist key)
+  "Return PLIST with KEY removed."
+  (let ((result nil) (rest plist))
+    (while rest
+      (unless (eq (car rest) key)
+        (setq result (plist-put result (car rest) (cadr rest))))
+      (setq rest (cddr rest)))
+    result))
+
+(defun logseq-org-sync-reconcile--block-empty-p (block)
+  "Return non-nil when BLOCK carries no content at all.
+A block is empty when it has no text, todo keyword, tags, properties,
+scheduled/deadline timestamps, body, or children."
+  (and (or (null (plist-get block :text))
+           (string-empty-p (plist-get block :text)))
+       (null (plist-get block :todo))
+       (null (plist-get block :tags))
+       (null (plist-get block :properties))
+       (null (plist-get block :scheduled))
+       (null (plist-get block :deadline))
+       (null (plist-get block :body))
+       (null (plist-get block :children))))
+
+(defun logseq-org-sync-reconcile--drop-empty-blocks (blocks)
+  "Return BLOCKS with truly empty blocks removed, recursing into children.
+A block whose children all get dropped is re-checked and dropped too if
+it then has no other content."
+  (let ((result nil))
+    (dolist (block blocks)
+      (let ((children (plist-get block :children)))
+        (when children
+          (let ((kept (logseq-org-sync-reconcile--drop-empty-blocks children)))
+            (setq block (if kept
+                            (plist-put block :children kept)
+                          (logseq-org-sync-reconcile--plist-without
+                           block :children))))))
+      (unless (logseq-org-sync-reconcile--block-empty-p block)
+        (push block result)))
+    (nreverse result)))
+
+(defun logseq-org-sync-reconcile--node-drop-empty-blocks (node)
+  "Return NODE with truly empty blocks removed from its `:content'."
+  (let ((content (plist-get node :content)))
+    (if (null content)
+        node
+      (let ((kept (logseq-org-sync-reconcile--drop-empty-blocks content)))
+        (if kept
+            (plist-put node :content kept)
+          (logseq-org-sync-reconcile--plist-without node :content))))))
+
 (defun logseq-org-sync-reconcile--translate-plan (plan logseq roam graph)
   "Translate block references and block bodies in PLAN for the target side.
 LOGSEQ and ROAM are the two node tables; they supply the block
@@ -741,6 +801,10 @@ Logseq format, so block bodies are only translated for Markdown graphs."
              (when markdown-p
                (setq translated
                      (logseq-org-sync-reconcile--node-body-to-roam translated)))
+             (when logseq-org-sync-drop-empty-blocks
+               (setq translated
+                     (logseq-org-sync-reconcile--node-drop-empty-blocks
+                      translated)))
              (plist-put action :node translated)))
           ((and node (memq type '(create-logseq update-logseq)))
            (let ((translated (logseq-org-sync-reconcile--node-to-logseq
@@ -748,6 +812,10 @@ Logseq format, so block bodies are only translated for Markdown graphs."
              (when markdown-p
                (setq translated
                      (logseq-org-sync-reconcile--node-body-to-logseq translated)))
+             (when logseq-org-sync-drop-empty-blocks
+               (setq translated
+                     (logseq-org-sync-reconcile--node-drop-empty-blocks
+                      translated)))
              (plist-put action :node translated))))
          action))
      plan)))

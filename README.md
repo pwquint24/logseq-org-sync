@@ -324,6 +324,16 @@ Markdown ↔ Markdown). Across formats, two constructs are translated:
 Other body constructs (blockquotes, `#+BEGIN_*` blocks) cross
 formats verbatim and are not structurally translated.
 
+**Empty blocks**
+
+By default (`logseq-org-sync-drop-empty-blocks` is non-nil), truly
+empty blocks are dropped before a note is written. An empty block has no
+text, todo, tags, properties, planning lines, body, or children. This
+keeps the org-roam mirror free of the empty headlines that Logseq spacer
+bullets (`-` with no text) would otherwise produce. Set the option to
+nil to keep those blocks as empty org headlines instead (lossless, but
+noisier).
+
 ## The state cache
 
 Each graph has one small metadata file. It stores **metadata only ---

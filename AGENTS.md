@@ -752,6 +752,13 @@ not written) so a first run over an already-paired graph is a no-op.
 (default `.trash`); deleted files are moved there (relative path preserved),
 never hard-deleted.
 
+**Empty blocks.** `logseq-org-sync-drop-empty-blocks` (non-nil by default)
+drops truly empty blocks — no text, todo, tags, properties, planning lines,
+body, or children — from create/update nodes before they are written.  This
+keeps the org-roam mirror free of the empty headlines that Logseq's spacer
+bullets (`-` with no text) would otherwise produce.  Set it to nil to keep
+those blocks as empty org headlines (lossless but noisier).
+
 **Block references (AGENTS.md §6).**  After classification, `-plan` translates
 block references in the `:node` of each create/update action for its target
 side.  A block registry (block UUID → block text) is built from the source
