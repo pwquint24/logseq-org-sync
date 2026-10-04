@@ -8,3 +8,4 @@ package-cache/
 og/
 /md-treesit/
 before-after/
+/.projectile
