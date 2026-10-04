@@ -343,12 +343,15 @@ the Markdown parser; everything else uses the .org parser."
 
 (defun logseq-org-sync-logseq--format-headline (level todo text tags)
   "Format a headline line from LEVEL, TODO, TEXT and TAGS."
-  (let ((line (make-string level ?*)))
+  (let* ((stars (make-string level ?*))
+         (line stars))
     (when todo (setq line (concat line " " todo)))
     (when (and text (not (string-empty-p text)))
       (setq line (concat line " " text)))
     (when tags (setq line (concat line " :" (mapconcat #'identity tags ":") ":")))
-    line))
+    (if (string= line stars)
+        (concat stars " ")
+      line)))
 
 (defun logseq-org-sync-logseq--format-block (block)
   "Return BLOCK (a block plist) formatted as a list of lines."

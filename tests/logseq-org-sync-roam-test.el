@@ -116,6 +116,33 @@ SCHEDULED: <2026-10-01 Thu>
                      (logseq-org-sync-roam-format
                       (logseq-org-sync-roam-parse-buffer "X")))))))
 
+(ert-deftest logseq-org-sync-roam--empty-block-round-trip ()
+  (let ((node '(:title "X"
+                :content ((:level 1 :text "Heading"
+                           :children ((:level 2 :text "Before")
+                                      (:level 2)
+                                      (:level 2 :text "After"))))))
+        (expected "#+title: X
+
+* Heading
+** Before
+**\s
+** After
+"))
+    ;; An empty block must be written as a valid empty headline (`** '),
+    ;; not as bare asterisks, which org parses as body text.
+    (should (equal expected (logseq-org-sync-roam-format node)))
+    (with-temp-buffer
+      (insert expected)
+      (org-mode)
+      (let ((children (plist-get (car (plist-get
+                                       (logseq-org-sync-roam-parse-buffer "X")
+                                       :content))
+                                 :children)))
+        (should (equal '("Before" "" "After")
+                       (mapcar (lambda (b) (plist-get b :text)) children)))
+        (should-not (plist-member (cadr children) :body))))))
+
 (ert-deftest logseq-org-sync-roam--parse-block-body ()
   (let ((text "* TODO Draft
 SCHEDULED: <2026-10-01 Thu>
