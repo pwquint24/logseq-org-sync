@@ -76,6 +76,47 @@ non-empty (i.e. at least one file changed)."
             (or path "-")
             reason)))
 
+(defun logseq-org-sync-safety--move-delete-p (action)
+  "Return non-nil when ACTION moves or deletes a file.
+Rename actions move a file and trash actions move its surviving mirror
+to trash (AGENTS.md §7)."
+  (memq (plist-get action :type)
+        '(rename-roam rename-logseq trash-roam trash-logseq)))
+
+(defun logseq-org-sync-safety--move-delete-description (action)
+  "Return a human-readable description of a move/delete ACTION."
+  (pcase (plist-get action :type)
+    ('rename-roam
+     (format "Rename org-roam note %s to %s (renamed on the Logseq side)"
+             (plist-get action :from) (plist-get action :to)))
+    ('rename-logseq
+     (format "Rename Logseq note %s to %s (renamed on the org-roam side)"
+             (plist-get action :from) (plist-get action :to)))
+    ('trash-roam
+     (format "Move org-roam note %s to trash (deleted on the Logseq side)"
+             (plist-get action :path)))
+    ('trash-logseq
+     (format "Move Logseq note %s to trash (deleted on the org-roam side)"
+             (plist-get action :path)))))
+
+(defun logseq-org-sync-safety-confirm-text (plan)
+  "Return a confirmation question for PLAN, or nil when none is needed.
+Only move/delete actions (renames and trashes) ask for confirmation;
+they are listed so the user can see exactly what will change.  Plans
+with only create/update/seed actions return nil and can be applied
+without prompting."
+  (let ((actions (cl-remove-if-not #'logseq-org-sync-safety--move-delete-p
+                                   plan)))
+    (when actions
+      (format "This sync will move or delete %d file%s:\n%s\nProceed? "
+              (length actions)
+              (if (= (length actions) 1) "" "s")
+              (mapconcat (lambda (action)
+                           (concat "  "
+                                   (logseq-org-sync-safety--move-delete-description
+                                    action)))
+                         actions "\n")))))
+
 (defun logseq-org-sync-safety-dry-run-text (graph state)
   "Return a human-readable preview of the reconciliation of GRAPH and STATE.
 The plan is computed but never applied, so the filesystem is untouched."

@@ -101,7 +101,7 @@ org-roam is loaded.
 
 3.  Sync it:
 
-``` emacs-lispM-x logseq-org-sync            ;; pick a graph, preview, confirm
+``` emacs-lispM-x logseq-org-sync            ;; pick a graph, preview, apply
 M-x logseq-org-sync-here       ;; sync the graph of the current buffer
 M-x logseq-org-sync-all        ;; sync every configured graph
 ```
@@ -177,8 +177,8 @@ org-roam side is always `.org`.
 
 ## Commands
 
-- `logseq-org-sync` chooses a graph, shows a dry-run preview, and asks
-  before applying.
+- `logseq-org-sync` chooses a graph, shows a dry-run preview, and
+  applies it (asking only before moves or deletes).
 - `logseq-org-sync-here` syncs the graph containing the current
   buffer\'s file (on either side).
 - `logseq-org-sync-dry-run` previews a graph\'s plan without writing
@@ -397,8 +397,8 @@ breakdown is in [STATE-CACHE.org](STATE-CACHE.org).
 
 ## Safety
 
-- **Dry-run** --- every interactive sync shows a plan first; nothing is
-  written until you confirm.
+- **Dry-run** --- every interactive sync shows a plan first. Creates and
+  updates apply immediately; you are asked only before moves or deletes.
 - **Backup** --- before an overwrite, the existing file is copied under
   `<graph root>/.backup/`
   (`logseq-org-sync-safety-backup-directory`).

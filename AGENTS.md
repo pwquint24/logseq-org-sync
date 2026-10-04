@@ -789,6 +789,9 @@ reconciler: planning, classification, and execution stay in
 
 - `logseq-org-sync-safety-dry-run-text` (graph state) → a human-readable
   preview of the plan as a string; computes the plan but never applies it.
+- `logseq-org-sync-safety-confirm-text` (plan) → a confirmation question for
+  the plan's move/delete actions (renames and trashes), or nil when the plan
+  has none; used by `logseq-org-sync` to ask only before those changes.
 - `logseq-org-sync-safety-apply` (graph state plan) → state; backs up files
   about to be overwritten, applies the plan, then runs the updated hook.
 - `logseq-org-sync-safety-plan-and-apply` (graph state) → state; the
@@ -825,8 +828,9 @@ inside the org-roam directory.
 **Public functions:**
 
 - `logseq-org-sync` (graph) — interactive command: resolve a graph, load its
-  state, show the dry-run preview, ask for confirmation, then apply and save
-  state.  Operates one graph at a time.
+  state, show the dry-run preview, then apply and save state (prompting for
+  confirmation only when the plan moves or deletes files).  Operates one
+  graph at a time.
 - `logseq-org-sync-here` — sync the graph containing the current buffer's
   file, whether that file is on the Logseq side or the org-roam side; same
   preview/confirm flow as `logseq-org-sync`.

@@ -96,6 +96,27 @@ deleted afterwards."
       ;; Dry-run must not create the org-roam file.
       (should (not (file-exists-p (expand-file-name "pages/Dry.org" rroot)))))))
 
+(ert-deftest logseq-org-sync-safety--confirm-text-nil-without-moves ()
+  (should-not
+   (logseq-org-sync-safety-confirm-text
+    '((:type create-roam :path "pages/New.org")
+      (:type update-logseq :path "pages/Old.org")
+      (:type seed :path "pages/Seed.org")))))
+
+(ert-deftest logseq-org-sync-safety--confirm-text-lists-moves-and-deletes ()
+  (let ((text
+         (logseq-org-sync-safety-confirm-text
+          '((:type create-roam :path "pages/New.org")
+            (:type rename-roam :from "pages/Old.org" :to "pages/Newer.org")
+            (:type trash-logseq :path "pages/Gone.org")))))
+    (should text)
+    (should (string-match-p "move or delete" text))
+    (should (string-match-p
+             "Rename org-roam note pages/Old.org to pages/Newer.org" text))
+    (should (string-match-p
+             "Move Logseq note pages/Gone.org to trash" text))
+    (should-not (string-match-p "create-roam" text))))
+
 (ert-deftest logseq-org-sync-safety--backup-before-overwrite ()
   (logseq-org-sync-safety-test--with-setup ((graph :graph) (lroot :logseq-root)
                                             (rroot :roam-root))

@@ -259,23 +259,31 @@ Interactively, GRAPH is chosen from `logseq-org-sync-graphs'."
     (message "%s" (logseq-org-sync-safety-dry-run-text graph state))))
 
 (defun logseq-org-sync--sync-interactive (graph)
-  "Run an interactive preview/confirm sync of resolved GRAPH."
+  "Run an interactive preview/confirm sync of resolved GRAPH.
+Shows a dry-run preview, then applies without prompting unless the plan
+moves or deletes files, in which case confirmation is requested."
   (let* ((state (logseq-org-sync--load-state graph))
          (plan (logseq-org-sync-reconcile-plan graph state)))
     (if (null plan)
         (message "Logseq/org-roam sync: nothing to do for %S."
                  (plist-get graph :name))
       (message "%s" (logseq-org-sync-safety-dry-run-text graph state))
-      (when (y-or-n-p "Apply this sync? ")
-        (logseq-org-sync--apply-and-save graph state)
-        (message "Logseq/org-roam sync of %S complete."
-                 (plist-get graph :name))))))
+      (let ((confirm (logseq-org-sync-safety-confirm-text plan)))
+        (cond
+         ((and confirm (not (y-or-n-p confirm)))
+          (message "Logseq/org-roam sync of %S cancelled."
+                   (plist-get graph :name)))
+         (t
+          (logseq-org-sync--apply-and-save graph state)
+          (message "Logseq/org-roam sync of %S complete."
+                   (plist-get graph :name))))))))
 
 ;;;###autoload
 (defun logseq-org-sync (graph)
   "Synchronize GRAPH between its Logseq and org-roam sides.
-Shows a dry-run preview and asks for confirmation before applying.
-Interactively, GRAPH is chosen from `logseq-org-sync-graphs'."
+Shows a dry-run preview, then applies.  Confirmation is requested only
+when the plan moves or deletes files.  Interactively, GRAPH is chosen
+from `logseq-org-sync-graphs'."
   (interactive (list (logseq-org-sync--read-graph)))
   (logseq-org-sync--sync-interactive (logseq-org-sync--resolve graph)))
 
@@ -283,8 +291,9 @@ Interactively, GRAPH is chosen from `logseq-org-sync-graphs'."
 (defun logseq-org-sync-here ()
   "Synchronize the graph containing the current buffer's file.
 The buffer may visit a note under either the Logseq side or the
-org-roam side of a configured graph.  Shows a dry-run preview and asks
-for confirmation before applying."
+org-roam side of a configured graph.  Shows a dry-run preview, then
+applies; confirmation is requested only when the plan moves or deletes
+files."
   (interactive)
   (if-let* ((file buffer-file-name)
             (graph (logseq-org-sync--graph-for-file file)))
