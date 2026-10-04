@@ -46,6 +46,17 @@ Each graph has its own state file:
 
 So =work= and =personal= each get their own independent cache.
 
+** Regenerating via the command
+=logseq-org-sync-rebuild-state= (in =logseq-org-sync.el=) deletes the
+graph's state file and re-seeds it from the files currently on disk,
+recording every node present on *both* sides with its current paths,
+hashes, and mtimes. It writes no note files. Nodes present on only one
+side are left out and are handled by the next normal sync, so a
+one-sided file is never mistaken for a deletion.
+
+Use it when the cache has become corrupt and you want a clean baseline
+without running a full content sync.
+
 ** What happens if it is deleted or missing
 =logseq-org-sync-state-load= treats a missing or invalid file as an
 *empty state*. The next sync re-baselines and then saves a fresh state

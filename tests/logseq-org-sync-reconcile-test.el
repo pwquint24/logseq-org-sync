@@ -102,6 +102,29 @@ Both fixture sides are populated, so the first plan only seeds state."
       (should (null (logseq-org-sync-reconcile-plan graph state)))
       (should (= 3 (length (plist-get state :nodes)))))))
 
+(ert-deftest logseq-org-sync-reconcile--seed-rebuilds-baseline ()
+  (logseq-org-sync-reconcile-test--with-setup ((graph :graph))
+    (let ((state (logseq-org-sync-reconcile-seed graph)))
+      (should (= 3 (length (plist-get state :nodes))))
+      ;; The seeded baseline matches the files on disk, so nothing to plan.
+      (should (null (logseq-org-sync-reconcile-plan graph state))))))
+
+(ert-deftest logseq-org-sync-reconcile--seed-omits-one-sided-nodes ()
+  (logseq-org-sync-reconcile-test--with-setup ((graph :graph)
+                                               (lroot :logseq-root)
+                                               (rroot :roam-root))
+    (write-region "#+id: 10000000-0000-0000-0000-000000000004\n\n* Lone\n"
+                  nil (expand-file-name "pages/Lone.org" lroot))
+    (let ((state (logseq-org-sync-reconcile-seed graph)))
+      (should (= 3 (length (plist-get state :nodes))))
+      (should-not (logseq-org-sync-state-get
+                   state "10000000-0000-0000-0000-000000000004"))
+      ;; Seeding writes nothing; the one-sided node is left for the next sync.
+      (should-not (file-exists-p (expand-file-name "pages/Lone.org" rroot)))
+      (should (equal '(create-roam)
+                     (logseq-org-sync-reconcile-test--types
+                      (logseq-org-sync-reconcile-plan graph state)))))))
+
 (ert-deftest logseq-org-sync-reconcile--new-on-logseq-creates-roam ()
   (logseq-org-sync-reconcile-test--with-setup ((graph :graph) (lroot :logseq-root)
                                                (rroot :roam-root))

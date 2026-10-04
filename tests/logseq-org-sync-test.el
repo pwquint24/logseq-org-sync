@@ -26,6 +26,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'logseq-org-sync)
+(require 'logseq-org-sync-state)
 
 (defun logseq-org-sync-test--graph (tmp)
   "Return an org-format graph plist rooted in TMP."
@@ -83,6 +84,32 @@
             (should (file-exists-p (expand-file-name "pages/One.org" rroot)))
             (should (file-exists-p state-file))
             (should (= 1 (length (plist-get state :nodes))))))
+      (delete-directory tmp t))))
+
+(ert-deftest logseq-org-sync--rebuild-state ()
+  (let* ((tmp (make-temp-file "logseq-org-sync-cmd-" t))
+         (graph (logseq-org-sync-test--graph tmp))
+         (lroot (plist-get graph :logseq-root))
+         (state-file (plist-get graph :state-file)))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "pages" lroot) t)
+          (write-region "#+id: 10000000-0000-0000-0000-000000000001\n\n* One\n"
+                        nil (expand-file-name "pages/One.org" lroot))
+          (logseq-org-sync-run graph)
+          (should (file-exists-p state-file))
+          ;; A note unknown to the cache simulates a stale/corrupted store.
+          (write-region "#+id: 10000000-0000-0000-0000-000000000002\n\n* Two\n"
+                        nil (expand-file-name "pages/Two.org" lroot))
+          (logseq-org-sync-rebuild-state graph)
+          (let ((state (logseq-org-sync-state-load state-file)))
+            ;; Only the node present on both sides is seeded; the one-sided
+            ;; note is left out so the next sync classifies it as new.
+            (should (= 1 (length (plist-get state :nodes))))
+            (should (logseq-org-sync-state-get
+                     state "10000000-0000-0000-0000-000000000001"))
+            (should-not (logseq-org-sync-state-get
+                         state "10000000-0000-0000-0000-000000000002"))))
       (delete-directory tmp t))))
 
 (ert-deftest logseq-org-sync--graph-entry ()

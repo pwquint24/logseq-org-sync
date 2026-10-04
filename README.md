@@ -10,13 +10,84 @@ LOGSEQ-FORMAT.org and ORG-ROAM-FORMAT.org.
 
 The whole thing is vibe coded using deepseek and ECA
 
-## TL;DR
+## Installation
 
-1.  Put the repository on your `load-path`, then:
+The package is pure Emacs Lisp, so you only need the `.el` files on your
+`load-path`. There is no build step and no non-Elisp runtime dependency.
+The examples below install straight from GitHub with
+[straight.el](https://github.com/radian-software/straight.el); `(require
+'logseq-org-sync)` pulls in the rest of the `.el` files in the package.
 
-``` emacs-lisp(add-to-list 'load-path "/path/to/logseq-org-sync")
+### Vanilla Emacs (straight.el)
+
+``` emacs-lisp
+(straight-use-package
+ '(logseq-org-sync :type git
+                   :host github
+                   :repo "pwquint24/logseq-org-sync"
+                   :files ("*.el")))
+
 (require 'logseq-org-sync)
 ```
+
+The `:files ("*.el")` selector installs just the compiled sources and
+skips the demo graphs, fixtures, tests, and legacy converter. If you also
+want the test suite and fixtures locally, use the default file set
+instead:
+
+``` emacs-lisp
+(straight-use-package
+ '(logseq-org-sync :type git
+                   :host github
+                   :repo "pwquint24/logseq-org-sync"))
+```
+
+### Doom Emacs
+
+Doom already ships straight, so declare the package in `packages.el`:
+
+``` emacs-lisp
+(package! logseq-org-sync
+  :recipe (:host github
+           :repo "pwquint24/logseq-org-sync"
+           :files ("*.el")))
+```
+
+Then run `doom sync` and add the `(require 'logseq-org-sync)` (or the
+`use-package!` form below) to your `config.el`:
+
+``` emacs-lisp
+(use-package! logseq-org-sync
+  :commands (logseq-org-sync
+             logseq-org-sync-here
+             logseq-org-sync-all
+             logseq-org-sync-watch))
+```
+
+To keep the full checkout (tests and fixtures included), drop the
+`:files` key from the recipe:
+
+``` emacs-lisp
+(package! logseq-org-sync
+  :recipe (:host github :repo "pwquint24/logseq-org-sync"))
+```
+
+### Manual (load-path)
+
+If you would rather not use a package manager, clone the repository and
+put it on your `load-path`:
+
+``` emacs-lisp
+
+(add-to-list 'load-path "/path/to/logseq-org-sync")
+(require 'logseq-org-sync)
+
+```
+
+ ## TL;DR
+
+1.  Install the package (see [Installation](#installation)) and
+    `(require 'logseq-org-sync)`.
 
 2.  Add a graph by picking its Logseq folder:
 
@@ -115,6 +186,8 @@ org-roam side is always `.org`.
 - `logseq-org-sync-run` is a non-interactive sync; it forces newest-wins
   so it never prompts.
 - `logseq-org-sync-all` non-interactively syncs every configured graph.
+- `logseq-org-sync-rebuild-state` deletes and rebuilds a graph's state
+  cache from the files currently on disk (no note files are written).
 - `logseq-org-sync-add-graph` picks a Logseq folder, derives the name
   and mirror, and saves the config.
 - `logseq-org-sync-remove-graph` chooses a graph and stops syncing it
@@ -284,7 +357,15 @@ missing or invalid file as an **empty** state, and the next sync
 re-baselines and saves a fresh file. No note content is deleted or
 overwritten by deleting the cache itself.
 
-To regenerate it:
+To regenerate it, run:
+
+    M-x logseq-org-sync-rebuild-state
+
+This deletes the state file and re-seeds the cache from every node that
+is present on both sides, without writing any note files. Nodes present
+on only one side are left out and are handled by the next normal sync.
+
+Or do it by hand:
 
 1.  Delete the graph\'s state file:
 
@@ -312,7 +393,7 @@ On the first run after deletion:
 
 In short: **safe to delete, self-healing, but it forgets what changed
 since the last sync** until a fresh baseline is written. A more detailed
-breakdown is in [STATE-CACHE.md](STATE-CACHE.md).
+breakdown is in [STATE-CACHE.org](STATE-CACHE.org).
 
 ## Safety
 

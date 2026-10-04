@@ -28,6 +28,7 @@
 ;; - `logseq-org-sync-dry-run' — interactive preview, no writes.
 ;; - `logseq-org-sync-run'   — non-interactive sync (used by the hooks below).
 ;; - `logseq-org-sync-all'   — non-interactive sync of every configured graph.
+;; - `logseq-org-sync-rebuild-state' — delete and rebuild a graph's cache.
 ;; - `logseq-org-sync-add-graph' / `logseq-org-sync-remove-graph' — manage
 ;;   the `logseq-org-sync-graphs' list.
 ;; - `logseq-org-sync-after-save' — an `after-save-hook' function.
@@ -351,6 +352,22 @@ Each graph is synced with the newest-wins policy, so this never prompts."
         (logseq-org-sync-run graph)
         (setq count (1+ count)))
       (message "Synced %d graph(s)" count))))
+
+;;;###autoload
+(defun logseq-org-sync-rebuild-state (graph)
+  "Rebuild GRAPH's sync cache (the metadata state store) from disk.
+Deletes the existing state file and re-seeds it with the current paths,
+hashes, and mtimes of every node on both sides, treating the current
+contents as the new baseline.  No note files are written.  Use this to
+recover from a corrupted cache.  Interactively, GRAPH is chosen from
+`logseq-org-sync-graphs'."
+  (interactive (list (logseq-org-sync--read-graph)))
+  (setq graph (logseq-org-sync--resolve graph))
+  (let ((file (logseq-org-sync--state-file graph)))
+    (when (file-exists-p file)
+      (delete-file file)))
+  (logseq-org-sync--save-state graph (logseq-org-sync-reconcile-seed graph))
+  (message "Rebuilt sync cache for %S" (plist-get graph :name)))
 
 ;;; Automatic triggering
 

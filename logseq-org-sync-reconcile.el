@@ -779,6 +779,51 @@ for their target side (AGENTS.md §6, §11.1 step 6)."
 Alias for `logseq-org-sync-reconcile-plan' highlighting its safety."
   (logseq-org-sync-reconcile-plan graph state))
 
+(defun logseq-org-sync-reconcile--seed-record (id logseq-entry roam-entry)
+  "Return a fresh state record seeding ID from LOGSEQ-ENTRY and ROAM-ENTRY.
+Both entries must be present (the node exists on both sides); the record
+captures their current paths, hashes, and mtimes without writing files."
+  (let ((record (list :id id)))
+    (let ((path (plist-get logseq-entry :path)))
+      (when path (setq record (plist-put record :logseq-path path))))
+    (let ((hash (plist-get logseq-entry :hash)))
+      (when hash (setq record (plist-put record :logseq-hash hash))))
+    (let ((mtime (plist-get logseq-entry :mtime)))
+      (when mtime (setq record (plist-put record :logseq-mtime mtime))))
+    (let ((path (plist-get roam-entry :path)))
+      (when path (setq record (plist-put record :roam-path path))))
+    (let ((hash (plist-get roam-entry :hash)))
+      (when hash (setq record (plist-put record :roam-hash hash))))
+    (let ((mtime (plist-get roam-entry :mtime)))
+      (when mtime (setq record (plist-put record :roam-mtime mtime))))
+    (let ((title (or (plist-get logseq-entry :title)
+                     (plist-get roam-entry :title))))
+      (when title (setq record (plist-put record :title title))))
+    (plist-put record :last-sync (current-time))
+    record))
+
+;;;###autoload
+(defun logseq-org-sync-reconcile-seed (graph)
+  "Return a fresh state seeded from GRAPH's files currently on disk.
+Records every node present on both sides with its current paths, hashes,
+and mtimes as a new baseline.  Nodes present on only one side are left
+out so the next sync classifies them as new.  No files are written, so
+this recovers a corrupted cache by rebuilding its metadata from reality."
+  (let ((logseq (logseq-org-sync-reconcile--scan-logseq graph))
+        (roam (logseq-org-sync-reconcile--scan-roam graph))
+        (state (logseq-org-sync-state-empty))
+        (ids nil))
+    (maphash (lambda (id _entry) (unless (member id ids) (push id ids))) logseq)
+    (maphash (lambda (id _entry) (unless (member id ids) (push id ids))) roam)
+    (dolist (id (nreverse ids))
+      (let ((l (gethash id logseq))
+            (r (gethash id roam)))
+        (when (and l r)
+          (setq state
+                (logseq-org-sync-state-put
+                 state (logseq-org-sync-reconcile--seed-record id l r))))))
+    state))
+
 (defun logseq-org-sync-reconcile--write-logseq (node abs)
   "Write NODE to ABS using the Logseq writer."
   (make-directory (file-name-directory abs) t)

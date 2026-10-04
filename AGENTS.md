@@ -737,6 +737,9 @@ not written) so a first run over an already-paired graph is a no-op.
 - `logseq-org-sync-reconcile-dry-run` — alias of `-plan` (Phase 6 uses it).
 - `logseq-org-sync-reconcile-apply` (graph state plan) → updated state
   (writes files, moves deletions to trash, updates the state store).
+- `logseq-org-sync-reconcile-seed` (graph) → a fresh state seeding every
+  node present on both sides with its current paths/hashes/mtimes (no
+  content writes); rebuilds a corrupted cache's metadata from reality.
 
 **Conflict policy** (AGENTS.md §6):
 
@@ -833,6 +836,8 @@ inside the org-roam directory.
   returns the new state.  Used by the automatic triggers below.
 - `logseq-org-sync-all` — non-interactive sync of every configured graph via
   `logseq-org-sync-run`.
+- `logseq-org-sync-rebuild-state` (graph) — delete the graph's state file and
+  rebuild the cache from nodes present on both sides (no content writes).
 - `logseq-org-sync-add-graph` — pick a Logseq folder; the graph name defaults
   to the folder's basename and the `:roam-root` to
   `<logseq-org-sync-roam-directory>/<name>`; creates the mirror subdirectory
