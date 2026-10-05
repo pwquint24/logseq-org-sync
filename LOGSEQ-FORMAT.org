@@ -259,7 +259,11 @@ under their block:
 The sync extracts page links with the =markdown-inline= tree-sitter
 grammar when available (regexp fallback otherwise); block refs and
 embeds are preserved verbatim by the parse/write module and translated
-cross-side by the reconciler (see =AGENTS.md= §6).
+cross-side by the reconciler (see =AGENTS.md= §6).  The reconciler also
+converts page links (=[[Title]]= / =[Label]([[Title]])= ↔
+=[[id:uuid][…]]=), external URLs (=[Label](https://…)= ↔
+=[[https://…][Label]]=), and file links (=[Label](path)= / =![alt](path)= ↔
+=[[file:path][…]]=); see =AGENTS.md= §3.
 
 *** 6. Sync scope / limitations
 - A block round-trips its first line, TODO marker, =key:: value= block

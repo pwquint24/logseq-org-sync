@@ -126,7 +126,9 @@ cache is for, and the setup gotchas to watch out for.
   `file-notify`.
 - For Markdown graphs, tree-sitter with the `markdown` and
   `markdown-inline` grammars. Link extraction uses `markdown-inline`
-  when available and falls back to a regexp otherwise.
+  when available and falls back to a regexp otherwise. Emphasis
+  translation also uses `markdown-inline`; without that grammar,
+  Markdown emphasis is carried through verbatim.
 - org-roam is **not** required to run the engine or its tests. The
   org-roam side is read and written directly; org-roam is only relevant
   as the place where the mirror lives and as the tool that indexes the
@@ -267,6 +269,10 @@ side.
 - Block body is the section body in Logseq `.org`, indented
   continuation in Logseq Markdown, and the section body in org-roam
   `.org`.
+- Emphasis is `**bold**` / `*italic*` / `~~strike~~` /
+  `` `code` `` in Logseq Markdown, and `*bold*` /
+  `/italic/` / `+strike+` / `~code~` in Logseq
+  `.org` and org-roam `.org`.
 
 **Identity**
 
@@ -323,6 +329,24 @@ Markdown ↔ Markdown). Across formats, two constructs are translated:
 
 Other body constructs (blockquotes, `#+BEGIN_*` blocks) cross
 formats verbatim and are not structurally translated.
+
+**Emphasis**
+
+For Markdown graphs, inline emphasis is translated between Markdown and
+org. It is enabled by default; set
+`logseq-org-sync-translate-emphasis` to nil to carry emphasis
+markup through verbatim.
+
+- `**bold**` ↔ `*bold*`
+- `*italic*` ↔ `/italic/`
+- `~~strike~~` ↔ `+strike+`
+- `` `code` `` ↔ `~code~`
+
+The Markdown side is parsed with the `markdown-inline` tree-sitter
+grammar, so emphasis inside a Markdown link label is handled correctly.
+When that grammar is not installed, Markdown emphasis is left verbatim
+(the org side is always translated). Nested or combined emphasis (for
+example `**bold *italic***`) is not translated.
 
 **Empty blocks**
 
@@ -466,6 +490,12 @@ breakdown is in [STATE-CACHE.org](STATE-CACHE.org).
   multi-word tag uses the underscore spelling.
 - Cross-format body translation covers code blocks and Markdown tables
   only; other body constructs cross formats verbatim.
+- Emphasis translation handles only the non-nested `**bold**`,
+  `*italic*`, `~~strike~~` and `` `code` `` forms.
+  Nested or combined emphasis (`**bold *italic***`), underscore
+  emphasis (`__bold__` / `_italic_`), and emphasis inside an
+  org link description are left verbatim. Emphasis in a block body (as
+  opposed to its first line) is not translated.
 
 ## Testing
 

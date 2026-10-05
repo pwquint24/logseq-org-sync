@@ -29,8 +29,9 @@ The mapping is **1:1 on the relative path within the graph** (AGENTS.md §2):
 - `logseq/pages/Project Alpha.org` ↔ `org-roam/pages/Project Alpha.org`
 - `logseq/journals/2026-09-30.org` ↔ `org-roam/journals/2026-09-30.org`
 
-Logseq-only artifacts (`assets/`, `logseq/`) are omitted; asset relocation is
-deferred (AGENTS.md §11).
+Logseq-only artifacts (`assets/`, `logseq/`) are omitted; asset files are
+never copied or moved — file links are remapped to point at the Logseq
+graph's real `assets/` directory (AGENTS.md §3, §11).
 
 ## UUID legend
 

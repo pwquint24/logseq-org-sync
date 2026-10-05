@@ -1,0 +1,283 @@
+#+title: Markdown parsing in Emacs 31 (tree-sitter `markdown-inline`)
+#+author: logseq-org-sync
+#+date: 2026
+
+This is a working-notes reference for the Markdown-parsing behaviour that
+matters to the two-way sync engine.  It is grounded in what Emacs 31's bundled
+`markdown-ts-mode` does with the =markdown-inline= grammar, verified against a
+real install of the grammar.  It complements the on-disk format references
+(=LOGSEQ-FORMAT.org= and =ORG-ROAM-FORMAT.org=) with the /parser-level/ details
+that are not obvious from the surface syntax.
+
+* Two grammars, not one
+
+tree-sitter-markdown ships two grammars:
+
+| Grammar            | Scope                  | Used for                        |
+|--------------------+------------------------+---------------------------------|
+| =markdown=         | block level            | headings, lists, code fences    |
+| =markdown-inline=  | inline / span level    | emphasis, links, code spans     |
+
+Logseq Markdown is not plain CommonMark, so the block grammar cannot be used
+for the whole document.  It *is* safe to parse a single block's inline content
+with =markdown-inline=, which is exactly what the engine does for links and now
+emphasis.
+
+* Grammar availability
+
+=markdown-ts-mode.el= is bundled with Emacs 31, but the compiled grammar
+libraries are not.  Check with:
+
+#+begin_src emacs-lisp
+(treesit-language-available-p 'markdown-inline)   ; => t or nil
+(treesit-language-available-p 'markdown)          ; => t or nil
+#+end_src
+
+The libraries are looked up on =treesit-extra-load-path= (plus any system
+defaults).  On this machine they live under the Doom config:
+
+#+begin_src text
+~/.config/emacs/.local/etc/tree-sitter/libtree-sitter-markdown-inline.dylib
+~/.config/emacs/.local/etc/tree-sitter/libtree-sitter-markdown.dylib
+#+end_src
+
+Consequences:
+
+- =emacs -Q= does *not* load the user init, so =markdown-inline= is
+  unavailable unless =treesit-extra-load-path= is set explicitly (the test
+  harness does this).
+- =require 'markdown-ts-mode= only provides the mode; it does not install the
+  grammar.
+
+* Parsing one block's text
+
+#+begin_src emacs-lisp
+(require 'treesit)
+(require 'markdown-ts-mode nil t)        ; best-effort, so -Q doesn't error
+
+(defun md-inline-parse (text)
+  (with-temp-buffer
+    (insert text)
+    (let ((parser (treesit-parser-create 'markdown-inline)))
+      (treesit-parser-root-node parser))))
+#+end_src
+
+=treesit-node-string= renders the tree as an s-expression:
+
+#+begin_src text
+(md-inline-parse "**bold**")
+;; (inline (strong_emphasis (emphasis_delimiter)
+;;                          (emphasis_delimiter)
+;;                          (emphasis_delimiter)
+;;                          (emphasis_delimiter)))
+#+end_src
+
+* Emphasis node types
+
+The four inline emphasis constructs map to four named node types (this is the
+authoritative list, taken from =markdown-ts--treesit-settings= and
+=markdown-ts--emphasis-node-at-point=):
+
+| Markdown source          | Node type          | Delimiter length |
+|--------------------------+--------------------+------------------|
+| ~**bold**~ / ~__bold__~ | =strong_emphasis=  | 2                |
+| ~*italic*~ / ~_italic_~ | =emphasis=         | 1                |
+| =~~strike~~=             | =strikethrough=    | 2                |
+| ~`code`~                 | =code_span=        | 1                |
+
+The delimiter characters themselves are separate named nodes:
+
+| Delimiter node       | Marks                            |
+|----------------------+----------------------------------|
+| =emphasis_delimiter=  | ~*~, ~_~, =~= (strikethrough)     |
+| =code_span_delimiter= | backtick (code span)               |
+
+**Delimiter granularity.**  Every marker character is its own node, so
+~**bold**~ produces *four* =emphasis_delimiter= nodes (one per ~*~); the
+~bold~ text between them is anonymous (not a named node):
+
+#+begin_src text
+(md-inline-parse "a **bold** b")
+;; inline [1-13] text="a **bold** b"
+;;   strong_emphasis [3-11] text="**bold**"
+;;     emphasis_delimiter [3-4]  text="*"
+;;     emphasis_delimiter [4-5]  text="*"
+;;     emphasis_delimiter [9-10] text="*"
+;;     emphasis_delimiter [10-11] text="*"
+#+end_src
+
+Because the grammar already brackets the span, the simplest content extraction
+is to strip =delimiter-length= characters from each end of =treesit-node-text=,
+using 2 for =strong_emphasis= / =strikethrough= and 1 for =emphasis= /
+=code_span=.
+
+* The strikethrough quirk
+
+The grammar parses solo tildes incorrectly (a documented =markdown-ts-mode=
+limitation, tree-sitter-markdown issue #236).  A plain ~~~strike~~~ yields a
+spurious *nested* =strikethrough= node:
+
+#+begin_src text
+(md-inline-parse "~~strike~~")
+;; inline [1-11] text="~~strike~~"
+;;   strikethrough [1-11] text="~~strike~~"      ; the one you want
+;;     emphasis_delimiter [1-2] text="~"
+;;     strikethrough [2-10] text="~strike~"      ; spurious inner node
+;;       emphasis_delimiter [2-3] text="~"
+;;       emphasis_delimiter [9-10] text="~"
+;;     emphasis_delimiter [10-11] text="~"
+#+end_src
+
+**Workaround.**  Collect only the /outermost/ emphasis node at each span — i.e.
+a node whose parent is not itself one of the four emphasis types — and do not
+recurse into it.  That selects =[1-11]= and ignores the phantom inner node.
+This also happens to be the correct rule for genuine nesting (below).
+
+* Intraword underscore rules
+
+The grammar respects CommonMark's intraword rules for ~_~, so identifiers are
+safe:
+
+#+begin_src text
+(md-inline-parse "snake_case_word")   ;; (inline)
+(md-inline-parse "a_b_c")             ;; (inline)
+(md-inline-parse "2 * 3 * 4")         ;; (inline)  -- space-bounded * is not emphasis
+(md-inline-parse "foo_bar **bold**")  ;; (inline (strong_emphasis ...))
+#+end_src
+
+For the engine's "basic" emphasis scope only the ~*~ family is translated;
+~_italic_~ and ~__bold__~ are left verbatim even though the grammar classifies
+them as =emphasis= / =strong_emphasis=.
+
+* Nested / combined emphasis
+
+The grammar represents nesting explicitly:
+
+#+begin_src text
+(md-inline-parse "***both***")
+;; (inline (emphasis (emphasis_delimiter)
+;;                   (strong_emphasis (emphasis_delimiter) ...)
+;;                   (emphasis_delimiter)))
+
+(md-inline-parse "**bold and *italic* mix**")
+;; (inline (strong_emphasis (emphasis_delimiter) (emphasis_delimiter)
+;;                         (emphasis (emphasis_delimiter) ...)
+;;                         (emphasis_delimiter) (emphasis_delimiter)))
+#+end_src
+
+=***both***= is an =emphasis= wrapping a =strong_emphasis=; ~**bold *italic***~
+is a =strong_emphasis= wrapping an =emphasis=.  These are *not* handled by the
+engine (documented limitation): translation assumes a span is either italic or
+bold, never both.
+
+* Link node types in =markdown-inline=
+
+The inline grammar exposes these link/image nodes (again from
+=markdown-ts--treesit-settings=):
+
+| Node type                 | Children                          |
+|---------------------------+-----------------------------------|
+| =inline_link=             | =link_text=, =link_destination=, =link_title= |
+| =shortcut_link=           | =link_text=                       |
+| =image=                   | =image_description=, =link_destination= |
+| =full_reference_link=     | =link_text=, =link_label=         |
+| =collapsed_reference_link= | =link_text=                      |
+| =uri_autolink=            | —                                 |
+| =email_autolink=          | —                                 |
+
+Other inline node types seen in the font-lock rules: =backslash_escape=,
+=entity_reference=, =numeric_character_reference=, =html_tag=,
+=hard_line_break=, =latex_block=.
+
+* Logseq-specific constructs pass through
+
+Logseq's non-standard pieces are simply anonymous text to =markdown-inline= and
+never interfere with emphasis detection:
+
+#+begin_src text
+(md-inline-parse "a **bold** b ((uuid)) c")
+;; (inline (strong_emphasis ...))
+;;   -- "a ", " b ", "((uuid))", " c" are anonymous text, preserved verbatim
+#+end_src
+
+- ~[[Page]]~ parses as ~[~ + =shortcut_link= + ~]~ (two square brackets around
+  a shortcut link); the engine's link collector special-cases this.
+- ~[desc]([[Page]])~ parses as an =inline_link= whose =link_destination= is
+  ~[[Page]]~.
+- ~((uuid))~ and ~{{embed ((uuid))}}~ are plain text and are left untouched by
+  construction when only emphasis node spans are rewritten.
+
+* =treesit= API notes
+
+- =(treesit-node-children node &optional named)= — ~t~ returns named children
+  only, ~nil~ returns all children (including anonymous text/delimiters).
+  Walking named children is the right way to find emphasis/link nodes without
+  tripping over anonymous text.
+- =(treesit-node-text node t)= — the full source text of the node.
+- =(treesit-node-start node)= / =(treesit-node-end node)= — *1-based* buffer
+  positions (subtract ~(point-min)~, normally 1, to get 0-based string indices).
+- =(treesit-node-string node)= — s-expression rendering, useful for debugging.
+- After parsing, collect every edit first (=start= =end= =replacement=), then
+  apply them from last to first so earlier buffer positions stay valid.
+
+* Reverse direction: org → Markdown uses =org-element=
+
+The reverse translation reads org syntax, so =markdown-inline= cannot parse it.
+Use =org-element-parse-secondary-string=:
+
+#+begin_src emacs-lisp
+(org-element-parse-secondary-string
+  text '(bold italic strike-through code link))
+#+end_src
+
+The four object types the engine translates, and their single-character
+delimiters:
+
+| Object type      | Delimiter   | Length |
+|------------------+-------------+--------|
+| =bold=           | =*...*=     | 1      |
+| =italic=         | =/.../=     | 1      |
+| =strike-through= | =+...+=     | 1      |
+| =code=           | =~...~=     | 1      |
+
+The sibling =verbatim= object uses one equals sign on each side (not
+translated).
+
+Gotchas learned the hard way:
+
+- The =restriction= argument is a *list* of object type symbols, despite the
+  docstring saying "symbol".  Passing ~'object~ errors; passing ~'(object)~
+  silently matches nothing (returns only =plain-text=).
+- Include =link= in the restriction so a ~[[file:/a/b][x/y]]~ is lexed as a
+  single =link= object — otherwise the ~/a/~ inside the path is misread as
+  =italic=.
+- =:begin= / =:end= are 1-based buffer positions, and =:end= *includes*
+  =:post-blank= trailing whitespace.  The actual markup span ends at
+  ~(- end post-blank)~:
+
+  #+begin_src text
+  "hello *bold* world"
+  ;; bold begin=7 end=14 post-blank=1
+  ;; markup  = substring(6, (- 14 1) - 1) = substring(6, 12) = "*bold*"
+  ;; content = substring(7, 11)            = "bold"
+  #+end_src
+
+- =:contents-begin= / =:contents-end= exist for =bold= / =italic= /
+  =strike-through= but are *nil* for =code= (and =verbatim=), so derive content
+  by stripping one delimiter character from each end of the markup span
+  instead.
+- ~2 * 3 * 4~ produces no =bold= object (org's own emphasis boundary rules), so
+  it round-trips verbatim.
+
+* Emacs regexp alternation is first-match, not longest-match
+
+Not markdown-specific, but it bit us while prototyping a regexp fallback:
+
+#+begin_src emacs-lisp
+(string-match "a\\|ab" "ab")   ;; matches "a", NOT "ab"
+#+end_src
+
+Emacs returns the first alternative that matches, so in an alternation put the
+longer/stronger form first (~\*\*...\*\*~ before ~\*...\*~).  The final
+implementation avoids this entirely by using the tree-sitter grammar for the
+Markdown side.

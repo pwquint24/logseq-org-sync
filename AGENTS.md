@@ -212,8 +212,24 @@ Edge cases (reusing the existing package's logic):
   UUID, and converts the link.
 - **Ambiguous title/alias** (two nodes share one): leave that link un-converted
   on both sides (the existing fuzzy-dict conflict handling).
-- **Non-page links** (`[[file:...]]`, URLs): passed through untouched (the
-  existing link-classification rules).  Block refs/embeds are handled
+- **Markdown described page links**: `[Label]([[Title]])` becomes
+  `[[id:uuid][Label]]`; the reverse restores `[Label]([[Title]])` when the
+  description differs from the page title (otherwise the plain `[[Title]]`
+  form).  Logseq `.org` has no described page-link form, so a differing
+  description is dropped on that side.
+- **External URLs**: org-format graphs already share org link syntax, so URLs
+  pass through.  For Markdown graphs the reconciler converts
+  `[Label](https://…)` ↔ `[[https://…][Label]]`, and a bare `[[https://…]]`
+  becomes a Markdown autolink `<https://…>` (and back).
+- **File links**: the syntax is converted for Markdown graphs
+  (`[Label](path)` / `![alt](path)` ↔ `[[file:path][Label]]` /
+  `[[file:path]]`), and in **both** formats a relative file path on the Logseq
+  side is resolved to an **absolute** path on the org-roam side pointing at the
+  real file location (the Logseq graph's `assets/` directory); the reverse
+  restores a page-relative link back into the local graph's `assets/`
+  directory.  Assets are therefore *referenced*, never copied or moved.
+  Markdown image alt text is not representable in an org file link, so it is
+  not preserved across a round-trip (see §11).  Block refs/embeds are handled
   separately (§6).
 
 ---
@@ -766,9 +782,37 @@ side's node table; Logseq `((uuid))` / `{{embed ((uuid))}}` become
 `[[id:uuid][block text]]` / `[[id:uuid][#embed block text]]`, and the reverse
 direction maps a `[[id:uuid][...]]` link whose UUID is in the registry back to
 `((uuid))` (or `{{embed ((uuid))}}` when the description starts with
-`logseq-org-sync-block-embed-prefix`).  Page links and dangling references are
-left untouched.  Because the description is regenerated from the registry, the
+`logseq-org-sync-block-embed-prefix`).  Dangling block references are left
+untouched.  Because the description is regenerated from the registry, the
 embed/reference distinction round-trips losslessly.
+
+**Page, URL and file links (AGENTS.md §3).**  In the same `--translate-plan`
+pass, `-plan` builds a title→UUID map and a UUID→title map from both node
+tables, then rewrites page links in each create/update node for its target
+side: Logseq `[[Title]]` / `[Label]([[Title]])` become `[[id:uuid][Title]]` /
+`[[id:uuid][Label]]`, and org-roam `[[id:uuid][desc]]` becomes `[[Title]]`
+(or a Markdown described link when the description differs).  Dead and
+ambiguous page links stay as fuzzy links.  For Markdown graphs it also converts
+external URL links (`[Label](https://…)` ↔ `[[https://…][Label]]`) and file
+links (`[Label](path)` / `![alt](path)` ↔ `[[file:path][Label]]` /
+`[[file:path]]`).  File-link paths are remapped in **both** graph formats: a
+Logseq-relative path is resolved to an absolute path pointing at the real
+Logseq asset location on the org-roam side, and the reverse restores a
+page-relative link back into the local graph's `assets/` directory.  Assets
+are referenced, never copied.
+
+**Emphasis translation (AGENTS.md §11.4).**  For Markdown graphs only,
+`-plan` also translates inline emphasis on each block's `:text` (its first
+line): Markdown `**bold**` / `*italic*` / `~~strike~~` / `` `code` `` become
+org `*bold*` / `/italic/` / `+strike+` / `~code~` on the org-roam side, and
+the reverse restores the Markdown spellings.  The Markdown direction is parsed
+with the `markdown-inline` tree-sitter grammar
+(`logseq-org-sync-reconcile--translate-md-emphasis`); when that grammar is not
+available the Markdown emphasis is left verbatim.  The org direction uses
+`org-element` (`--translate-org-emphasis`).  Translation is controlled by
+`logseq-org-sync-translate-emphasis` (non-nil by default).  Nested/combined
+emphasis, underscore emphasis, and emphasis inside an org link description are
+left verbatim (AGENTS.md §11.4).
 
 **Cross-format block bodies (AGENTS.md §11.1 step 6, §11.2).**  For Markdown
 graphs only, `-plan` also translates each block's `:body` for its target side:
@@ -902,9 +946,13 @@ scope below.
 - Block refs/embeds are translated cross-side (§6), but org-roam has no live
   transclusion for embeds (they render as plain `id:` links there), and
   dangling block references are preserved verbatim.
-- Asset relocation and full timestamp/tag translation. Because `assets/` is
-  Logseq-only, local asset links (e.g. `../assets/foo.png`) are broken on the
-  org-roam side; v1 assumes no local assets or out-of-band asset sync.
+- Asset *relocation* (copying/moving files) and full timestamp/tag
+  translation.  File-link paths are now remapped so the org-roam side points
+  at the Logseq graph's real `assets/` directory (no copying), and the reverse
+  restores a page-relative link back into the local graph (§3, §9.11).  The
+  asset files themselves stay put on the Logseq side.  Markdown image alt text
+  has no org file-link representation, so it is not preserved across a
+  round-trip.
 - Block bodies beyond the first line (tables, code fences, multi-line text)
   round-trip through `:body` (same-format byte-for-byte, plus cross-format
   for fenced code blocks and Markdown tables).  See §9.8, §11.1, and §11.2.
@@ -1063,3 +1111,45 @@ headline tags, so no org-side change was needed.
 - A `#` inside a `[[...]]` page link is not protected from tag extraction.
 - Trailing sentence punctuation on a plain `#tag` (`#tag.`) is dropped rather
   than kept as part of the tag.
+
+### 11.4 Markdown emphasis translation
+
+**Status.**  Implemented in the reconciler
+(`logseq-org-sync-reconcile--translate-md-emphasis` /
+`--translate-org-emphasis`), applied on each block's `:text` for Markdown
+graphs only.  It is enabled by default; set
+`logseq-org-sync-translate-emphasis` to nil to carry emphasis verbatim.
+
+**Behavior.**
+
+- Markdown → org: `**bold**` → `*bold*`, `*italic*` → `/italic/`,
+  `~~strike~~` → `+strike+`, `` `code` `` → `~code~`.  The Markdown side is
+  parsed with the `markdown-inline` tree-sitter grammar (the `strong_emphasis`,
+  `emphasis`, `strikethrough` and `code_span` nodes); when that grammar is not
+  installed the Markdown emphasis is left verbatim.
+- org → Markdown: the reverse spellings.  The org side is parsed with
+  `org-element-parse-secondary-string` for `bold`, `italic`, `strike-through`
+  and `code` objects, which keeps `/`-bearing file paths and URLs inside links
+  intact.
+- `_italic_` / `__bold__` underscore emphasis is **not** translated.
+
+**Decisions made.**
+
+- *Basic only*: translation assumes emphasis is not nested or combined.  Each
+  span is either bold, italic, strike, or code — never more than one at once.
+- *First-line only*: emphasis is translated on a block's `:text` (its first
+  line), matching link translation; emphasis inside a block's `:body` is not
+  translated.
+- *Treesitter primary*: the Markdown side relies on `markdown-inline` rather
+  than a regexp, so Logseq block references (`((uuid))`) and links are left
+  untouched by construction (only emphasis node spans are rewritten).
+
+**Known limitations.**
+
+- Nested or combined emphasis (`**bold *italic***`, `***both***`) is not
+  supported and may produce incorrect markup; it is assumed absent.
+- Underscore emphasis (`_italic_`, `__bold__`) is left verbatim.
+- Emphasis inside an org link description (e.g. `[[id:…][Page *bold*]]`) is
+  not translated in the org → Markdown direction.
+- Emphasis in a block's `:body` (continuation lines) is not translated.
+

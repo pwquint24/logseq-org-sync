@@ -46,6 +46,14 @@ Freeform text, standard paragraphs, and headings.
   link form.
 - *Fuzzy links* --- =[[Label]]= may still appear for unresolved targets;
   the sync leaves them alone unless a node is created.
+- *Page links* --- the reconciler maps =[[Title]]= / =[Label]([[Title]])=
+  on the Logseq side to =[[id:<uuid>][Title]]= / =[[id:<uuid>][Label]]=
+  here, and back (see =AGENTS.md= §3).
+- *URL and file links* --- external URLs pass through in org graphs; for
+  Markdown graphs the reconciler converts =[Label](https://…)= ↔
+  =[[https://…][Label]]=.  File links are syntax-converted and remapped to
+  point at the Logseq graph's =assets/= directory (never copied); see
+  =AGENTS.md= §3.
 - *Block references* --- =((uuid))= and embeds ={{embed ((uuid))}}= are
   preserved verbatim by the parse/write module; the reconciler
   translates them cross-side to =[[id:<uuid>][block text]]= and
