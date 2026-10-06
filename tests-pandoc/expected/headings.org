@@ -3,10 +3,31 @@
 :END:
 #+title: headings
 * Heading 1
-** Heading 2
-*** Heading 3
+:PROPERTIES:
+:heading: 1
+:END:
+* Heading 2
+:PROPERTIES:
+:heading: 2
+:END:
+* Heading 3
+:PROPERTIES:
+:heading: 3
+:END:
 * [#A] High priority heading
-** [#B] Medium priority heading
-*** [#C] Low priority heading
-- A block with a heading inside it:
-  **** Nested Heading
+:PROPERTIES:
+:heading: 1
+:END:
+* [#B] Medium priority heading
+:PROPERTIES:
+:heading: 2
+:END:
+* [#C] Low priority heading
+:PROPERTIES:
+:heading: 3
+:END:
+* A block with a heading inside it:
+** Nested Heading
+:PROPERTIES:
+:heading: 4
+:END:

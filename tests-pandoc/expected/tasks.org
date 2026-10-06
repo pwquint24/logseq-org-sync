@@ -2,11 +2,11 @@
 :ID:       40c0722e-87a6-40e2-ab35-027aa6d5d7d2
 :END:
 #+title: tasks
-- TODO [#A] Task 1
-- STARTED [#B] Task 2
-- DONE [#C] Task 3
-- TODO Task 4
-- NEXT Task 5
-- [#A] Block with priority only
-- Block with [#B] priority inside
-- Block with {{cloze one}} and {{cloze two}} clozes
+* TODO [#A] Task 1
+* STARTED [#B] Task 2
+* DONE [#C] Task 3
+* TODO Task 4
+* NEXT Task 5
+* [#A] Block with priority only
+* Block with [#B] priority inside
+* Block with {{cloze one}} and {{cloze two}} clozes

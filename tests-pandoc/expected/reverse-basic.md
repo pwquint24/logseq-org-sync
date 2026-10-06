@@ -13,8 +13,8 @@ icon:: ���
 - Content under heading 1.
 
 - NOW [#B] ## Subheading
-  collapsed:: true
   id:: next-b-subheading
+  collapsed:: true
 
 - {{embed ((6494c06d-e5c4-4293-82aa-01aa600e2cb5))}}
 - {{embed [[Reverse Test Page]]}}

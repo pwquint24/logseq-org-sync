@@ -6,7 +6,7 @@ This project provides a translation pipeline between **Logseq Markdown** graphs 
 
 The goal is to leverage Pandoc's AST manipulation capabilities via Lua scripting to bridge the differences in data model and syntax between the two systems:
 - **Source**: Logseq outliner Markdown files (`.md`) containing block indentation, page and block properties, embeds, block references (`((uuid))`), aliased links (`[Alias]([[Page]])`), planning lines (`SCHEDULED:`, `DEADLINE:`), and metadata.
-- **Target**: Org-roam v2 documents (`.org`) containing top-level `:PROPERTIES:` drawers with `:ID:`, `:ROAM_ALIASES:`, `#+title:`, `#+filetags:`, standard document prose and headlines (`*`, `**`), headline property drawers, internal target anchors (`<<uuid>>`), and ID links (`[[id:uuid][Label]]`).
+- **Target**: Org-roam v2 documents (`.org`) containing top-level `:PROPERTIES:` drawers with `:ID:`, `:ROAM_ALIASES:`, `#+title:`, `#+filetags:`, standard document prose and headlines (`*`, `**`), headline property drawers, block-level property drawers (`:PROPERTIES:` with `:ID:`), and ID links (`[[id:uuid][Label]]`).
 - **Scope**: Focus specifically on the non-standard features of Logseq Markdown (outlining, properties, embeds, block links, task planning) without attempting to re-implement Markdown/Org features already handled natively by Pandoc.
 - **Future Goal**: Bidirectional conversion (Org-roam `.org` $\to$ Logseq `.md`).
 
@@ -119,23 +119,23 @@ Content under section...
 ### 3.3 Elements Mapping
 | Concern | Logseq Markdown | Org-roam Target |
 | :--- | :--- | :--- |
-| **Model** | Outliner-first (indented `- ` bullets) | Document-first (prose + `*` headlines) |
+| **Model** | Outliner-first (indented `- ` bullets) | Outliner-first Org headlines (`*`, `**`, `***`) |
 | **File ID** | `id:: <uuid>` page property | Top-level `:PROPERTIES:` drawer `:ID: <uuid>` |
 | **Title** | `title::` or filename slug | `#+title: <title>` |
 | **Aliases** | `alias:: a, b` or `aliases::` | `:ROAM_ALIASES: "a" "b"` in file drawer |
 | **File Tags** | `tags:: a, b` or `filetags::` | `#+filetags: :a:b:` (Org colon tags) |
 | **Arbitrary Props** | `key:: val` page property | `:KEY: val` in top `:PROPERTIES:` drawer |
-| **Headings** | `- # Heading` or `# Heading` | `* Heading` (level 1-6) |
-| **Heading ID** | `id:: <uuid>` under heading | Headline `:PROPERTIES:` drawer `:ID: <uuid>` |
-| **Heading Tags** | `#tag` / `#[[multi word]]` on heading | `:tag:multi_word:` at end of headline |
-| **List Item ID** | `id:: <uuid>` under list item | Dedicated anchor `<<uuid>> ` at start of item |
+| **Blocks** | `- Block text` (nested bullets) | Org headlines (`*`, `**`, `***` by outline depth) |
+| **Visual Headings** | `- # Heading` or `# Heading` | `* Heading` with `:heading: 1..6` property |
+| **Block ID** | `id:: <uuid>` under block | Headline `:PROPERTIES:` drawer `:id: <uuid>` |
+| **Block Tags** | `#tag` / `#[[multi word]]` on heading | `:tag:multi_word:` at end of headline |
 | **Page Links** | `[[Page Title]]` | `[[Page Title]]` |
 | **Page Aliases** | `[Label]([[Page Title]])` | `[[Page Title][Label]]` |
 | **Block Refs (bare)** | `((uuid))` | `[[id:uuid]]` |
 | **Block Refs (aliased)**| `[Label](((uuid)))` | `[[id:uuid][Label]]` |
 | **Block Embeds** | `{{embed ((uuid))}}` | Preserved `{{embed ((uuid))}}` (or `[[id:uuid][#embed]]`) |
-| **Planning** | `SCHEDULED:` / `DEADLINE:` | Headline planning or indented under list item |
-| **Ordered Lists** | `logseq.order-list-type:: number` | Org ordered list (`1. `, `2. `) |
+| **Planning** | `SCHEDULED:` / `DEADLINE:` | Planning line immediately under headline |
+| **Ordered Lists** | `logseq.order-list-type:: number` | Child headlines in outline |
 | **Special Blocks** | `#+BEGIN_TIP ... #+END_TIP` | Native unescaped `#+BEGIN_TIP ... #+END_TIP` |
 
 ---
@@ -173,8 +173,8 @@ filters/logseq-to-org.lua
 7. **Unpacking Standalone Blocks**:
    - Logseq wraps quotes, code blocks, tables, and alert blocks inside bullets (`- `).
    - The filter unpacks standalone `CodeBlock`, `BlockQuote`, `Table`, `RawBlock`, and `#+BEGIN_*` alert blocks from list items so they render as clean, native Org blocks.
-8. **Anchors for List Items**:
-   - List items carrying `id:: <uuid>` have an internal Org anchor `<<uuid>> ` prepended to the item text, ensuring ID linkability without breaking the list.
+8. **Block-Level Property Drawers**:
+   - List items carrying `id:: <uuid>` or other block properties (`collapsed::`, etc.) have a dedicated `:PROPERTIES:` drawer indented under the item text containing `:ID: <uuid>` (and any other block properties), ensuring proper Org-roam / Org-ID link resolution.
 
 ### 4.3 Validation Results
 Tested against multiple files in `Logseq-Demo-Graph-main/pages/`:
@@ -193,14 +193,14 @@ Tested against multiple files in `Logseq-Demo-Graph-main/pages/`:
 The implementation in `filters/logseq-to-org.lua` handles the following Logseq features:
 
 ### 6.1 Hierarchy & Properties
-- **Outliner Hierarchy**: Nested bullet lists in Markdown are preserved as nested lists in Org-mode, or lifted to headlines if they contain Logseq-style headings (`- # Heading`).
+- **Outliner Hierarchy**: Matches Logseq's native Org format: every block in the outline tree is translated to an Org headline (`*`, `**`, `***`) according to its outline nesting depth.
+- **Visual Headings**: Blocks containing markdown hash headings (`- # Heading`, `# Heading`, `- ## Subheading`) have their leading hashes stripped from the title, and their visual heading level is stored as `:heading: 1..6` in the block's `:PROPERTIES:` drawer.
 - **Page Properties**: Extracted from the start of the file and converted into a top-level Org `:PROPERTIES:` drawer.
   - `id::` $\to$ `:ID:` (generates deterministic UUID based on filename if missing).
   - `title::` $\to$ `#+title:`.
   - `alias::`/`aliases::` $\to$ `:ROAM_ALIASES:`.
   - `tags::`/`filetags::` $\to$ `#+filetags:` (standard Org colon-separated format).
-- **Block Properties**: Properties like `id::` or `collapsed::` under a bullet are extracted. `id::` becomes an internal anchor `<<uuid>>` for list items or an `:ID:` property for headlines.
-- **Ordered Lists**: Detected via `logseq.order-list-type:: number` and converted to Org ordered lists (`1.`, `2.`).
+- **Block Properties**: Properties like `id::` or `collapsed::` under a block are extracted into the headline's `:PROPERTIES:` drawer (`:id:`, `:heading:`, `:collapsed:`, etc.).
 
 ### 6.2 Links & References
 - **Fuzzy Page Links**: `[[Page Name]]` is identified via lookahead buffering and converted to `[[Page Name]]`.

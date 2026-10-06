@@ -2,14 +2,14 @@
 :ID:       278f2ec6-73ef-477b-85f5-13110bd20984
 :END:
 #+title: links-and-refs
-- Link to [[Page Name]]
-- Aliased link [[Page Name][Label]]
-- Block reference [[id:6494c06d-09e2-430c-bd73-e8a336c3c06f]]
-- Aliased block reference
-  [[id:6494c06d-09e2-430c-bd73-e8a336c3c06f][Label]]
-- Asset link [[file:../assets/file.pdf][PDF]]
-- Drawing link [[../draws/2023-06-22-15-36-43.excalidraw]]
-- Block embed [[id:6494c06d-09e2-430c-bd73-e8a336c3c06f][#embed]]
-- Page embed [[Target Page][#embed]]
-- Fuzzy link [[Fuzzy Page]]
-- Fuzzy link with spaces [[Page With Spaces]]
+* Link to [[Page Name]]
+* Aliased link [[Page Name][Label]]
+* Block reference [[id:6494c06d-09e2-430c-bd73-e8a336c3c06f]]
+* Aliased block reference
+[[id:6494c06d-09e2-430c-bd73-e8a336c3c06f][Label]]
+* Asset link [[file:../assets/file.pdf][PDF]]
+* Drawing link [[../draws/2023-06-22-15-36-43.excalidraw]]
+* Block embed [[id:6494c06d-09e2-430c-bd73-e8a336c3c06f][#embed]]
+* Page embed [[Target Page][#embed]]
+* Fuzzy link [[Fuzzy Page]]
+* Fuzzy link with spaces [[Page With Spaces]]

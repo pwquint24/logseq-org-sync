@@ -204,8 +204,16 @@ function Pandoc(doc)
       
       local header_text = prefix .. pandoc.utils.stringify(clean_inlines)
       local header_lines = { header_text }
-      for k, v in pairs(header_props) do
-        table.insert(header_lines, string.format("  %s:: %s", k, v))
+      if header_props["id"] then
+        table.insert(header_lines, string.format("  id:: %s", header_props["id"]))
+      end
+      local other_keys = {}
+      for k, _ in pairs(header_props) do
+        if k ~= "id" then table.insert(other_keys, k) end
+      end
+      table.sort(other_keys)
+      for _, k in ipairs(other_keys) do
+        table.insert(header_lines, string.format("  %s:: %s", k, header_props[k]))
       end
       
       table.insert(new_blocks, pandoc.Plain(pandoc.RawInline("markdown", table.concat(header_lines, "\n"))))

@@ -255,6 +255,108 @@ local function build_org_roam_header(page_props, filename)
   return table.concat(lines, "\n")
 end
 
+-- Build Org-mode property drawer for a block/list item
+local function build_block_drawer(props)
+  local lines = { ":PROPERTIES:" }
+  local count = 0
+  if props["id"] then
+    table.insert(lines, string.format(":id: %s", props["id"].val))
+    count = count + 1
+  end
+  if props["heading"] then
+    table.insert(lines, string.format(":heading: %s", props["heading"].val))
+    count = count + 1
+  end
+  if props["collapsed"] then
+    table.insert(lines, string.format(":collapsed: %s", props["collapsed"].val))
+    count = count + 1
+  end
+  local other_props = {}
+  for k, v in pairs(props) do
+    if k ~= "id" and k ~= "heading" and k ~= "collapsed" and k ~= "logseq.order-list-type" then
+      table.insert(other_props, { key = v.raw_key:lower(), val = v.val })
+    end
+  end
+  table.sort(other_props, function(a, b) return a.key < b.key end)
+  for _, p in ipairs(other_props) do
+    table.insert(lines, string.format(":%s: %s", p.key, p.val))
+    count = count + 1
+  end
+  table.insert(lines, ":END:")
+  if count > 0 then
+    return table.concat(lines, "\n")
+  end
+  return nil
+end
+
+-- Extract task state and priority from inlines
+local function extract_task_and_priority(inlines)
+  local task_state = nil
+  local priority = nil
+  local kw_map = {
+    LATER = "TODO",
+    NOW = "NEXT",
+    DOING = "STARTED",
+    WAITING = "WAIT",
+    CANCELLED = "CANCELLED",
+    TODO = "TODO",
+    DONE = "DONE"
+  }
+  local i = 1
+  while i <= #inlines and inlines[i].t == "Space" do i = i + 1 end
+  if i <= #inlines and inlines[i].t == "Str" then
+    local s = inlines[i].text
+    local p = s:match("^(%[#[ABC]%])$")
+    if p then
+      priority = p
+      i = i + 1
+      while i <= #inlines and inlines[i].t == "Space" do i = i + 1 end
+      if i <= #inlines and inlines[i].t == "Str" and kw_map[inlines[i].text] then
+        task_state = kw_map[inlines[i].text]
+        i = i + 1
+      end
+    elseif kw_map[s] then
+      task_state = kw_map[s]
+      i = i + 1
+      while i <= #inlines and inlines[i].t == "Space" do i = i + 1 end
+      if i <= #inlines and inlines[i].t == "Str" and inlines[i].text:match("^(%[#[ABC]%])$") then
+        priority = inlines[i].text
+        i = i + 1
+      end
+    end
+  end
+  while i <= #inlines and inlines[i].t == "Space" do i = i + 1 end
+  local remaining = {}
+  for j = i, #inlines do table.insert(remaining, inlines[j]) end
+  return task_state, priority, remaining
+end
+
+-- Strip leading markdown hashes from inlines (# Heading -> Heading)
+local function strip_leading_hashes(inlines)
+  local new_inlines = {}
+  local stripped = false
+  for _, inl in ipairs(inlines) do
+    if not stripped and inl.t == "Str" then
+      local s = inl.text:gsub("^#+%s*", "")
+      if s ~= "" then table.insert(new_inlines, pandoc.Str(s)) end
+      stripped = true
+    elseif not stripped and inl.t == "Space" then
+      -- skip space directly after hash
+    else
+      table.insert(new_inlines, inl)
+    end
+  end
+  return new_inlines
+end
+
+-- Convert inlines to Org headline text using Pandoc Org writer
+local function inlines_to_org_text(inlines)
+  if not inlines or #inlines == 0 then return "" end
+  local doc = pandoc.Pandoc({ pandoc.Plain(inlines) })
+  local org_text = pandoc.write(doc, "org")
+  return trim(org_text)
+end
+
 -- Extract tags from headline inlines, returning cleaned inlines and list of tag strings
 local function extract_headline_tags(inlines)
   local tags = {}
@@ -546,192 +648,158 @@ local function is_standalone_block(block)
   return false
 end
 
--- Lift Headers and extract properties from BulletList items
-local function process_bullet_list(bullet_list)
+-- Process outline items recursively into Org headlines
+local function process_outline_list(bullet_list, level)
   local result_blocks = {}
-  local pending_list_items = {}
-  local is_ordered = false
   
-  local function flush_pending_items()
-    if #pending_list_items > 0 then
-      if is_ordered then
-        table.insert(result_blocks, pandoc.OrderedList(pending_list_items))
-      else
-        table.insert(result_blocks, pandoc.BulletList(pending_list_items))
-      end
-      pending_list_items = {}
-      is_ordered = false
-    end
-  end
-
   for _, item_blocks in ipairs(bullet_list.content) do
-    if #item_blocks > 0 then
+    if #item_blocks == 0 then
+      -- Skip empty blocks (do not emit spare *)
+    else
       local first_block = item_blocks[1]
-      local has_header = false
-      local header_block = nil
+      local visual_level = nil
+      local raw_inlines = nil
       
-      -- Check if first block is Header or starts with # Heading in text
-      if first_block.t == "Header" then
-        has_header = true
-        header_block = first_block
-        header_block.identifier = ""
-      elseif (first_block.t == "Para" or first_block.t == "Plain") then
-        local str = inlines_to_text(first_block.content)
-        local hashes, title_text = str:match("^(#+)%s+(.*)$")
-        if hashes then
-          has_header = true
-          local level = #hashes
-          header_block = pandoc.Header(level, pandoc.Inlines({ pandoc.Str(title_text) }))
-          header_block.identifier = ""
+      -- Check special alert blocks (#+BEGIN_TIP etc.)
+      local special = process_special_block(first_block)
+      if special then
+        table.insert(result_blocks, special)
+      elseif first_block.t == "Header" then
+        visual_level = first_block.level
+        raw_inlines = first_block.content
+      elseif first_block.t == "Figure" and first_block.content and #first_block.content > 0 then
+        local inner = first_block.content[1]
+        if inner.t == "Plain" or inner.t == "Para" then
+          raw_inlines = inner.content
+        else
+          table.insert(result_blocks, first_block)
         end
+      elseif first_block.t == "Para" or first_block.t == "Plain" then
+        local str = inlines_to_text(first_block.content)
+        local hashes = str:match("^(#+)%s+")
+        if hashes then
+          visual_level = #hashes
+          raw_inlines = strip_leading_hashes(first_block.content)
+        else
+          raw_inlines = first_block.content
+        end
+      else
+        table.insert(result_blocks, first_block)
       end
       
-      if has_header then
-        flush_pending_items()
+      if raw_inlines then
+        local kept, props, plan = separate_properties_from_inlines(raw_inlines)
+        if visual_level then
+          props["heading"] = { val = tostring(visual_level), raw_key = "heading" }
+        end
         
-        local item_props = {}
-        local item_planning = {}
-        local remaining_blocks = {}
-        
-        for idx = 2, #item_blocks do
-          local b = item_blocks[idx]
+        -- Check subsequent blocks for continuation properties/planning
+        local next_idx = 2
+        local remaining_body_blocks = {}
+        while next_idx <= #item_blocks do
+          local b = item_blocks[next_idx]
           if b.t == "Para" or b.t == "Plain" then
-            local kept, props, plan = separate_properties_from_inlines(b.content)
-            for k, v in pairs(props) do item_props[k] = v end
-            if plan.scheduled then item_planning.scheduled = plan.scheduled end
-            if plan.deadline then item_planning.deadline = plan.deadline end
-            if #kept > 0 then
-              b.content = transform_inlines(kept)
-              table.insert(remaining_blocks, b)
+            local b_kept, b_props, b_plan = separate_properties_from_inlines(b.content)
+            for k, v in pairs(b_props) do props[k] = v end
+            if b_plan.scheduled then plan.scheduled = b_plan.scheduled end
+            if b_plan.deadline then plan.deadline = b_plan.deadline end
+            if #b_kept > 0 then
+              b.content = transform_inlines(b_kept)
+              table.insert(remaining_body_blocks, b)
             end
           else
-            table.insert(remaining_blocks, b)
+            table.insert(remaining_body_blocks, b)
           end
+          next_idx = next_idx + 1
         end
+
+        local task_state, priority, cleaned_inlines = extract_task_and_priority(kept)
+        local tag_cleaned = extract_headline_tags(cleaned_inlines)
+        local transformed = transform_inlines(tag_cleaned)
+        local title_str = inlines_to_org_text(transformed)
         
-        if item_props["id"] then
-          header_block.attributes["ID"] = item_props["id"].val
-        end
-        if item_props["collapsed"] then
-          header_block.attributes["collapsed"] = item_props["collapsed"].val
-        end
-        for k, v in pairs(item_props) do
-          if k ~= "id" and k ~= "collapsed" then
-            header_block.attributes[v.raw_key] = v.val
-          end
-        end
-        
-        -- Extract tags from header text and format
-        header_block.content = extract_headline_tags(header_block.content)
-        header_block.content = transform_inlines(header_block.content)
-        table.insert(result_blocks, header_block)
-        
-        if item_planning.scheduled or item_planning.deadline then
-          local plan_str = ""
-          if item_planning.scheduled then
-            plan_str = plan_str .. "SCHEDULED: " .. item_planning.scheduled .. " "
-          end
-          if item_planning.deadline then
-            plan_str = plan_str .. "DEADLINE: " .. item_planning.deadline .. " "
-          end
-          table.insert(result_blocks, pandoc.RawBlock("org", trim(plan_str)))
-        end
-        
-        for _, rb in ipairs(remaining_blocks) do
-          if rb.t == "BulletList" then
-            local sub_blocks = process_bullet_list(rb)
-            for _, sb in ipairs(sub_blocks) do
-              table.insert(result_blocks, sb)
+        -- If the bullet line had only properties (e.g. id::) and the text was on the next line
+        if title_str == "" and #remaining_body_blocks > 0 then
+          local next_b = remaining_body_blocks[1]
+          if next_b.t == "Para" or next_b.t == "Plain" then
+            title_str = inlines_to_org_text(next_b.content)
+            table.remove(remaining_body_blocks, 1)
+          elseif next_b.t == "OrderedList" and #next_b.content > 0 then
+            local first_item = next_b.content[1]
+            if #first_item > 0 and (first_item[1].t == "Plain" or first_item[1].t == "Para") then
+              title_str = "3. " .. inlines_to_org_text(first_item[1].content)
+              table.remove(first_item, 1)
+              if #first_item == 0 then
+                table.remove(next_b.content, 1)
+                if #next_b.content == 0 then
+                  table.remove(remaining_body_blocks, 1)
+                end
+              end
             end
-          else
-            table.insert(result_blocks, rb)
           end
         end
+
+        local stars = string.rep("*", level)
+        local parts = { stars }
+        if task_state then table.insert(parts, task_state) end
+        if priority then table.insert(parts, priority) end
+        if title_str ~= "" then table.insert(parts, title_str) end
+        local headline_line = table.concat(parts, " ")
         
-      else
-        -- Check if single item is a standalone block element (unpack from list)
-        if #item_blocks == 1 then
-          local b = item_blocks[1]
-          local special = process_special_block(b)
-          if special then
-            flush_pending_items()
-            table.insert(result_blocks, special)
-          elseif is_standalone_block(b) then
-            flush_pending_items()
-            table.insert(result_blocks, b)
-          else
-            -- Process single regular block
-            local cleaned = {}
-            if b.t == "Para" or b.t == "Plain" then
-              local kept, props, plan = separate_properties_from_inlines(b.content)
-              if props["logseq.order-list-type"] and props["logseq.order-list-type"].val == "number" then
-                is_ordered = true
-              end
-              if #kept > 0 then
-                local inlines = transform_inlines(kept)
-                if props["id"] then
-                  table.insert(inlines, 1, pandoc.RawInline("org", string.format("<<%s>> ", props["id"].val)))
-                end
-                if plan.scheduled or plan.deadline then
-                  local p_str = "\n"
-                  if plan.scheduled then p_str = p_str .. "  SCHEDULED: " .. plan.scheduled .. " " end
-                  if plan.deadline then p_str = p_str .. "  DEADLINE: " .. plan.deadline .. " " end
-                  table.insert(inlines, pandoc.RawInline("org", p_str))
-                end
-                b.content = inlines
-                table.insert(cleaned, b)
-              end
+        local plan_line = nil
+        local plan_parts = {}
+        if plan.scheduled then table.insert(plan_parts, "SCHEDULED: " .. plan.scheduled) end
+        if plan.deadline then table.insert(plan_parts, "DEADLINE: " .. plan.deadline) end
+        if #plan_parts > 0 then plan_line = table.concat(plan_parts, " ") end
+        
+        local drawer = build_block_drawer(props)
+
+        local is_empty = (title_str == "" or is_empty_inlines(kept))
+          and not task_state
+          and not priority
+          and not visual_level
+          and not plan_line
+          and not drawer
+
+        if not is_empty then
+          local out_lines = { headline_line }
+          if plan_line then table.insert(out_lines, plan_line) end
+          if drawer then table.insert(out_lines, drawer) end
+          table.insert(result_blocks, pandoc.RawBlock("org", table.concat(out_lines, "\n")))
+          
+          for _, b in ipairs(remaining_body_blocks) do
+            if b.t == "BulletList" then
+              local children = process_outline_list(b, level + 1)
+              for _, cb in ipairs(children) do table.insert(result_blocks, cb) end
             else
-              table.insert(cleaned, b)
-            end
-            if #cleaned > 0 then
-              table.insert(pending_list_items, cleaned)
+              table.insert(result_blocks, b)
             end
           end
         else
-          -- Multiple blocks in item
-          local cleaned_item_blocks = {}
-          for _, b in ipairs(item_blocks) do
-            if b.t == "Para" or b.t == "Plain" then
-              local kept, props, plan = separate_properties_from_inlines(b.content)
-              if props["logseq.order-list-type"] and props["logseq.order-list-type"].val == "number" then
-                is_ordered = true
-              end
-              local special = process_special_block(b)
-              if special then
-                table.insert(cleaned_item_blocks, special)
-              elseif #kept > 0 then
-                local inlines = transform_inlines(kept)
-                if props["id"] then
-                  table.insert(inlines, 1, pandoc.RawInline("org", string.format("<<%s>> ", props["id"].val)))
-                end
-                if plan.scheduled or plan.deadline then
-                  local p_str = "\n"
-                  if plan.scheduled then p_str = p_str .. "  SCHEDULED: " .. plan.scheduled .. " " end
-                  if plan.deadline then p_str = p_str .. "  DEADLINE: " .. plan.deadline .. " " end
-                  table.insert(inlines, pandoc.RawInline("org", p_str))
-                end
-                b.content = inlines
-                table.insert(cleaned_item_blocks, b)
-              end
-            elseif b.t == "BulletList" then
-              local sub_blocks = process_bullet_list(b)
-              for _, sb in ipairs(sub_blocks) do
-                table.insert(cleaned_item_blocks, sb)
-              end
+          -- Empty block: if it has child lists, promote children to current level
+          for _, b in ipairs(remaining_body_blocks) do
+            if b.t == "BulletList" then
+              local children = process_outline_list(b, level)
+              for _, cb in ipairs(children) do table.insert(result_blocks, cb) end
             else
-              table.insert(cleaned_item_blocks, b)
+              table.insert(result_blocks, b)
             end
           end
-          if #cleaned_item_blocks > 0 then
-            table.insert(pending_list_items, cleaned_item_blocks)
+        end
+      else
+        for idx = 2, #item_blocks do
+          local b = item_blocks[idx]
+          if b.t == "BulletList" then
+            local children = process_outline_list(b, level + 1)
+            for _, cb in ipairs(children) do table.insert(result_blocks, cb) end
+          else
+            table.insert(result_blocks, b)
           end
         end
       end
     end
   end
   
-  flush_pending_items()
   return result_blocks
 end
 
@@ -756,15 +824,27 @@ function Pandoc(doc)
     if special then
       table.insert(new_blocks, special)
     elseif block.t == "BulletList" then
-      local lifted = process_bullet_list(block)
-      for _, lb in ipairs(lifted) do
-        table.insert(new_blocks, lb)
+      local outlines = process_outline_list(block, 1)
+      for _, ob in ipairs(outlines) do
+        table.insert(new_blocks, ob)
       end
     elseif block.t == "Header" then
-      block.identifier = ""
-      block.content = extract_headline_tags(block.content)
-      block.content = transform_inlines(block.content)
-      table.insert(new_blocks, block)
+      local visual_level = block.level
+      local props = { heading = { val = tostring(visual_level), raw_key = "heading" } }
+      local task_state, priority, cleaned = extract_task_and_priority(block.content)
+      local tag_cleaned = extract_headline_tags(cleaned)
+      local transformed = transform_inlines(tag_cleaned)
+      local title_str = inlines_to_org_text(transformed)
+      local stars = "*"
+      local parts = { stars }
+      if task_state then table.insert(parts, task_state) end
+      if priority then table.insert(parts, priority) end
+      if title_str ~= "" then table.insert(parts, title_str) end
+      local hl = table.concat(parts, " ")
+      local drawer = build_block_drawer(props)
+      local lines = { hl }
+      if drawer then table.insert(lines, drawer) end
+      table.insert(new_blocks, pandoc.RawBlock("org", table.concat(lines, "\n")))
     elseif block.t == "Para" or block.t == "Plain" then
       if not is_empty_block(block) then
         block.content = transform_inlines(block.content)

@@ -5,4 +5,4 @@
 :END:
 #+title: Custom Page Title
 #+filetags: :tag1:tag2:
-- First block.
+* First block.
