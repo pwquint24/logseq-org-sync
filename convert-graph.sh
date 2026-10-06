@@ -24,7 +24,7 @@ PANDOC="${PANDOC:-pandoc}"
 FILTER_TO_ORG="$SCRIPT_DIR/filters/logseq-to-org.lua"
 
 # Forward translation flags (Logseq MD -> Org-roam ORG); mirrors the Makefile.
-FLAGS_TO_ORG=(-f markdown-simple_tables-multiline_tables+mark-superscript
+FLAGS_TO_ORG=(-f markdown-simple_tables-multiline_tables+mark-superscript-implicit_header_references
               -t org
               --lua-filter "$FILTER_TO_ORG")
 

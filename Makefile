@@ -5,7 +5,7 @@ FILTER_TO_ORG = filters/logseq-to-org.lua
 FILTER_TO_MD = filters/org-to-logseq.lua
 
 # Flags for forward translation (Logseq MD -> Org-roam ORG)
-FLAGS_TO_ORG = -f markdown-simple_tables-multiline_tables+mark-superscript -t org --lua-filter $(FILTER_TO_ORG)
+FLAGS_TO_ORG = -f markdown-simple_tables-multiline_tables+mark-superscript-implicit_header_references -t org --lua-filter $(FILTER_TO_ORG)
 
 # Flags for reverse translation (Org-roam ORG -> Logseq MD)
 FLAGS_TO_MD = -f org -t markdown --lua-filter $(FILTER_TO_MD)

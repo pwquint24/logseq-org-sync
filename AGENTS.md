@@ -8,7 +8,7 @@ The goal is to leverage Pandoc's AST manipulation capabilities via Lua scripting
 - **Source**: Logseq outliner Markdown files (`.md`) containing block indentation, page and block properties, embeds, block references (`((uuid))`), aliased links (`[Alias]([[Page]])`), planning lines (`SCHEDULED:`, `DEADLINE:`), and metadata.
 - **Target**: Org-roam v2 documents (`.org`) containing top-level `:PROPERTIES:` drawers with `:ID:`, `:ROAM_ALIASES:`, `#+title:`, `#+filetags:`, standard document prose and headlines (`*`, `**`), headline property drawers, block-level property drawers (`:PROPERTIES:` with `:ID:`), and ID links (`[[id:uuid][Label]]`).
 - **Scope**: Focus specifically on the non-standard features of Logseq Markdown (outlining, properties, embeds, block links, task planning) without attempting to re-implement Markdown/Org features already handled natively by Pandoc.
-- **Future Goal**: Bidirectional conversion (Org-roam `.org` $\to$ Logseq `.md`).
+- **Bidirectional**: Org-roam `.org` $\to$ Logseq `.md` conversion (see section 8).
 
 ---
 
@@ -153,7 +153,7 @@ filters/logseq-to-org.lua
 ### 4.2 Key Findings & Discoveries
 1. **Pandoc Reader Option Conflicts**:
    - In Pandoc's default Markdown reader, empty bullets followed by sub-bullets (`\t-` on a separate line) can trigger the `simple_tables` extension, incorrectly turning entire nested outlines into simple ASCII tables.
-   - **Solution**: Run Pandoc with `-f markdown-simple_tables-multiline_tables+mark-superscript` to ensure bullet outlines are cleanly parsed as nested `BulletList` AST nodes without spurious table conversions.
+   - **Solution**: Run Pandoc with `-f markdown-simple_tables-multiline_tables+mark-superscript-implicit_header_references` to ensure bullet outlines are cleanly parsed as nested `BulletList` AST nodes without spurious table conversions (and so `[[Heading Text]]` wikilinks are not mis-parsed as heading references).
 2. **Top-Level File Header via RawBlock**:
    - [ ] Pandoc's default Org writer does not natively write Org-roam top-level `:PROPERTIES:` drawers.
    - **Solution**: Emit the file `:PROPERTIES:` drawer, `#+title:`, and `#+filetags:` as a `pandoc.RawBlock('org', header_str)` at the beginning of the AST `doc.blocks`.
@@ -234,9 +234,50 @@ The implementation in `filters/logseq-to-org.lua` handles the following Logseq f
 
 ---
 
+## 7. Emacs Integration (`logseq-org-sync-pd.el`)
+
+The Lua filters handle **structure** (outlines, properties, task states); the
+Elisp library `logseq-org-sync-pd.el` handles **identity resolution** using the
+org-roam database. It is the pandoc backend of the larger `logseq-org-sync`
+package (prefix `logseq-org-sync-pd-`).
+
+### 7.1 Forward: Logseq $\to$ Org-roam
+- `logseq-org-sync-pd-import-files` (FILES TARGET-DIR): pandoc-converts each
+  `.md`, preserving the `pages/`/`journals/` layout, syncs `org-roam-db`, then
+  resolves page links.
+- `logseq-org-sync-pd-resolve-page-links`: rewrites fuzzy links
+  (`[[Page Title]]`, `[[Page Title][Label]]`) to `id:` links
+  (`[[id:UUID]]`, `[[id:UUID][Label]]`) via `org-roam-node-from-title-or-alias`.
+  - Ambiguous title (multiple nodes): link left untouched, `# WARNING:` comment
+    inserted above it.
+  - Dangling title (no node): link left untouched.
+  - `id:` block refs, `file:` links, and URL links are never touched.
+
+### 7.2 Reverse: Org-roam $\to$ Logseq
+- `logseq-org-sync-pd-export-files` (FILES TARGET-DIR): restores file-level id
+  links on a temp copy, then pandoc-converts to `.md`.
+- `logseq-org-sync-pd-restore-page-links`: rewrites `id:` links whose target is a
+  **file-level** node (`org-roam-node-level` = 0) back to `[[Title]]` /
+  `[[Title][Label]]`; `id:` links to **heading** nodes are left as block
+  references so the reverse filter maps them to `((uuid))`.
+
+### 7.3 Link round-trip
+| Logseq | Org-roam (resolved) |
+| --- | --- |
+| `[[Page]]` | `[[id:page-uuid]]` |
+| `[Label]([[Page]])` | `[[id:page-uuid][Label]]` |
+| `{{embed [[Page]]}}` | `[[id:page-uuid][#embed]]` |
+| `((uuid))` | `[[id:block-uuid]]` |
+| `[Label](((uuid)))` | `[[id:block-uuid][Label]]` |
+| `{{embed ((uuid))}}` | `[[id:block-uuid][#embed]]` |
+
+---
+
 ## 8. Bidirectional Translation Status
 
 Both forward and reverse translation filters are now implemented and verified.
+The Elisp layer (section 7) runs on top of the filters for id-based link
+resolution and restoration.
 
 ### 8.1 Logseq $\to$ Org-Roam (`logseq-to-org.lua`)
 - **Hierarchy**: Lifts headings from list items to headlines.
@@ -285,7 +326,7 @@ The test suite compares Pandoc's output against manually verified files in `test
 - [ ] **Task 1.1: Standalone Runner Script**:
   - Create an executable runner script (`logseq-to-org.sh` or python CLI) that bundles the appropriate pandoc flags:
     ```bash
-    pandoc -f markdown-simple_tables-multiline_tables+mark-superscript \
+    pandoc -f markdown-simple_tables-multiline_tables+mark-superscript-implicit_header_references \
            -t org \
            --lua-filter filters/logseq-to-org.lua \
            "$input_file" -o "$output_file"
