@@ -648,6 +648,40 @@ local function is_standalone_block(block)
   return false
 end
 
+-- Check whether a LineBlock represents a Logseq pipe table.
+-- Logseq tables have no Pandoc-recognized header separator, so Pandoc parses them
+-- as Markdown line blocks. Rows that are actually table rows end with a pipe and
+-- contain at least one internal pipe (i.e. at least two columns).
+local function is_logseq_table_lineblock(block)
+  if not block or block.t ~= "LineBlock" then return false end
+  local rows = block.content
+  if #rows == 0 then return false end
+  for _, row in ipairs(rows) do
+    local text = trim(inlines_to_text(row))
+    local _, count = text:gsub("|", "")
+    if count < 2 or not text:match("|%s*$") then
+      return false
+    end
+  end
+  return true
+end
+
+-- Wrap Markdown source text in an Org markdown source block.
+local function markdown_src_block(markdown_text)
+  return pandoc.RawBlock("org", "#+begin_src markdown\n" .. markdown_text .. "\n#+end_src")
+end
+
+-- Convert a LineBlock representing a Logseq pipe table into a Markdown source block.
+-- The line-block parser strips the leading "| " marker from each row, so it is
+-- restored here to preserve the original Markdown table verbatim.
+local function lineblock_to_markdown_src(block)
+  local lines = {}
+  for _, row in ipairs(block.content) do
+    table.insert(lines, "| " .. inlines_to_text(row))
+  end
+  return markdown_src_block(table.concat(lines, "\n"))
+end
+
 -- Process outline items recursively into Org headlines
 local function process_outline_list(bullet_list, level)
   local result_blocks = {}
@@ -683,6 +717,8 @@ local function process_outline_list(bullet_list, level)
         else
           raw_inlines = first_block.content
         end
+      elseif first_block.t == "LineBlock" and is_logseq_table_lineblock(first_block) then
+        table.insert(result_blocks, lineblock_to_markdown_src(first_block))
       else
         table.insert(result_blocks, first_block)
       end
@@ -855,6 +891,8 @@ function Pandoc(doc)
       table.insert(new_blocks, pandoc.walk_block(block, {
         Inlines = transform_inlines
       }))
+    elseif block.t == "LineBlock" and is_logseq_table_lineblock(block) then
+      table.insert(new_blocks, lineblock_to_markdown_src(block))
     else
       table.insert(new_blocks, block)
     end

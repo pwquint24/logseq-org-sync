@@ -136,6 +136,8 @@ Content under section...
 | **Block Embeds** | `{{embed ((uuid))}}` | Preserved `{{embed ((uuid))}}` (or `[[id:uuid][#embed]]`) |
 | **Planning** | `SCHEDULED:` / `DEADLINE:` | Planning line immediately under headline |
 | **Ordered Lists** | `logseq.order-list-type:: number` | Child headlines in outline |
+| **Tables** | `| a | b |` without a header separator | `#+begin_src markdown` source block |
+| **Pipe Tables** | `| a | b |` + `|--|--|` separator | Native Org table |
 | **Special Blocks** | `#+BEGIN_TIP ... #+END_TIP` | Native unescaped `#+BEGIN_TIP ... #+END_TIP` |
 
 ---
@@ -173,6 +175,7 @@ filters/logseq-to-org.lua
 7. **Unpacking Standalone Blocks**:
    - Logseq wraps quotes, code blocks, tables, and alert blocks inside bullets (`- `).
    - The filter unpacks standalone `CodeBlock`, `BlockQuote`, `Table`, `RawBlock`, and `#+BEGIN_*` alert blocks from list items so they render as clean, native Org blocks.
+   - Separator-less Logseq tables (pipe rows with no `|--|--|` header row) are parsed by Pandoc as a Markdown `LineBlock`. The filter detects these and wraps them in a `#+begin_src markdown` block to preserve the source table verbatim instead of emitting `#+begin_verse`.
 8. **Block-Level Property Drawers**:
    - List items carrying `id:: <uuid>` or other block properties (`collapsed::`, etc.) have a dedicated `:PROPERTIES:` drawer indented under the item text containing `:ID: <uuid>` (and any other block properties), ensuring proper Org-roam / Org-ID link resolution.
 
@@ -226,6 +229,7 @@ The implementation in `filters/logseq-to-org.lua` handles the following Logseq f
 - **Cloze Deletions**: `{{cloze text}}` is preserved verbatim.
 - **Math**: Both `$..$` and `$$..$$` are converted to standard Org-mode math LaTeX syntax.
 - **Alert Blocks**: Logseq/Org-style alert blocks (`#+BEGIN_TIP`, etc.) are unpacked from bullets and preserved as native Org blocks.
+- **Tables**: Separator-less Logseq pipe tables (no `|--|--|` header row) are wrapped in a `#+begin_src markdown` source block; proper pipe tables with a `|--|--|` separator remain native Org tables.
 - **Line Breaks**: `[:br]` is converted to `\\`.
 
 ---
@@ -240,6 +244,7 @@ Both forward and reverse translation filters are now implemented and verified.
 - **Tasks**: Maps Logseq states (`LATER`, `NOW`, `DOING`) to Org (`TODO`, `NEXT`, `STARTED`).
 - **Links/Embeds**: Converts fuzzy links and translates `{{embed ...}}` to `[[id:uuid][#embed]]`.
 - **Assets**: Correctly prefixes `assets/` and `draws/` with `file:`.
+- **Tables**: Wraps separator-less Logseq pipe tables in markdown source blocks; preserves proper pipe tables as native Org tables.
 
 ### 8.2 Org-Roam $\to$ Logseq (`org-to-logseq.lua`)
 - **Hierarchy**: Restores headlines to indented Logseq blocks.
