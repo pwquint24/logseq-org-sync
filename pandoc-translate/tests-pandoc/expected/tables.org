@@ -1,0 +1,18 @@
+:PROPERTIES:
+:ID:       2bb80a13-76d6-45d7-9d00-58a44c003fa7
+:END:
+#+title: tables
+#+begin_src markdown
+| Syntax | Description |
+| markdown | pipe table |
+| org | org table |
+#+end_src
+| Name  | Value |
+|-------+-------|
+| Alpha | 1     |
+| Beta  | 2     |
+
+#+begin_src markdown
+| Feature | Notes |
+| Line break | one[:br]two |
+#+end_src

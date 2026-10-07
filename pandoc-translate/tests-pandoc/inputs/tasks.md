@@ -1,0 +1,8 @@
+- TODO [#A] Task 1
+- DOING [#B] Task 2
+- DONE [#C] Task 3
+- LATER Task 4
+- NOW Task 5
+- [#A] Block with priority only
+- Block with [#B] priority inside
+- Block with {{cloze one}} and {{cloze two}} clozes

@@ -1,0 +1,33 @@
+:PROPERTIES:
+:ID:       2fd31a50-9719-4743-9ca7-afda2f645f45
+:END:
+#+title: headings
+* Heading 1
+:PROPERTIES:
+:heading: 1
+:END:
+* Heading 2
+:PROPERTIES:
+:heading: 2
+:END:
+* Heading 3
+:PROPERTIES:
+:heading: 3
+:END:
+* [#A] High priority heading
+:PROPERTIES:
+:heading: 1
+:END:
+* [#B] Medium priority heading
+:PROPERTIES:
+:heading: 2
+:END:
+* [#C] Low priority heading
+:PROPERTIES:
+:heading: 3
+:END:
+* A block with a heading inside it:
+** Nested Heading
+:PROPERTIES:
+:heading: 4
+:END:

@@ -1,0 +1,8 @@
+- # Heading 1
+- ## Heading 2
+- ### Heading 3
+- # [#A] High priority heading
+- ## [#B] Medium priority heading
+- ### [#C] Low priority heading
+- A block with a heading inside it:
+  - #### Nested Heading

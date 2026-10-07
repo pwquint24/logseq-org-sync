@@ -1,0 +1,10 @@
+- Link to [[Page Name]]
+- Aliased link [Label]([[Page Name]])
+- Block reference ((6494c06d-09e2-430c-bd73-e8a336c3c06f))
+- Aliased block reference [Label](((6494c06d-09e2-430c-bd73-e8a336c3c06f)))
+- Asset link [PDF](../assets/file.pdf)
+- Drawing link ![Drawing](../draws/2023-06-22-15-36-43.excalidraw)
+- Block embed {{embed ((6494c06d-09e2-430c-bd73-e8a336c3c06f))}}
+- Page embed {{embed [[Target Page]]}}
+- Fuzzy link [[Fuzzy Page]]
+- Fuzzy link with spaces [[Page With Spaces]]

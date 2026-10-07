@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID:       6499faf4-36c5-44d2-ba2a-9e489b209292
+:ROAM_ALIASES: "alias 1" "alias 2"
+:ICON: ���
+:END:
+#+title: Custom Page Title
+#+filetags: :tag1:tag2:
+* First block.
