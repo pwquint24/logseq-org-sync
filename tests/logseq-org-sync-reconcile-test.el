@@ -30,25 +30,6 @@
 (require 'logseq-org-sync-reconcile)
 (require 'logseq-org-sync-state)
 
-(defun logseq-org-sync-reconcile-test--ensure-markdown-grammar ()
-  "Add common tree-sitter grammar directories to `treesit-extra-load-path'.
-This lets the Markdown emphasis tests exercise the real `markdown-inline'
-grammar even under `emacs -Q' (which does not load the user's init)."
-  (require 'treesit)
-  (dolist (dir (list (expand-file-name "~/.config/emacs/.local/etc/tree-sitter")
-                     (expand-file-name "~/.emacs.d/tree-sitter")
-                     (expand-file-name "~/.emacs.d/treesit-grammars")))
-    (when (and (file-directory-p dir)
-               (not (member dir treesit-extra-load-path)))
-      (push dir treesit-extra-load-path))))
-
-(logseq-org-sync-reconcile-test--ensure-markdown-grammar)
-
-(defun logseq-org-sync-reconcile-test--require-markdown-grammar ()
-  "Skip the current ERT test when the `markdown-inline' grammar is absent."
-  (unless (treesit-language-available-p 'markdown-inline)
-    (ert-skip "markdown-inline tree-sitter grammar not available")))
-
 (defconst logseq-org-sync-reconcile-test-dir
   (file-name-directory (expand-file-name (or load-file-name buffer-file-name)))
   "Directory containing this test file.")
@@ -289,103 +270,17 @@ Both fixture sides are populated, so the first plan only seeds state."
         ;; Dry-run must not create the org-roam file.
         (should (not (file-exists-p (expand-file-name "pages/Dry.org" rroot))))))))
 
-(defconst logseq-org-sync-reconcile-test-markdown-fixtures
-  (expand-file-name "../fixtures/Work-markdown" logseq-org-sync-reconcile-test-dir)
-  "Root of the Phase 0 paired Markdown `Work' fixtures.")
-
-(defun logseq-org-sync-reconcile-test--markdown-setup ()
-  "Copy the paired Markdown fixtures into a temp directory.
-Return a plist with `:tmp', `:logseq-root', `:roam-root', and `:graph'."
-  (let* ((tmp (make-temp-file "logseq-org-sync-reconcile-md-" t))
-         (logseq-root (expand-file-name "logseq" tmp))
-         (roam-root (expand-file-name "org-roam" tmp)))
-    (copy-directory (expand-file-name "logseq"
-                                      logseq-org-sync-reconcile-test-markdown-fixtures)
-                    logseq-root t t t)
-    (copy-directory (expand-file-name "org-roam"
-                                      logseq-org-sync-reconcile-test-markdown-fixtures)
-                    roam-root t t t)
-    (list :tmp tmp
-          :logseq-root logseq-root
-          :roam-root roam-root
-          :graph (list :name "work-md"
-                       :logseq-root logseq-root
-                       :roam-root roam-root
-                       :pages-directory "pages"
-                       :journals-directory "journals"))))
-
-(defmacro logseq-org-sync-reconcile-test--with-markdown-setup (bindings &rest body)
-  "Evaluate BODY with a fresh Markdown fixture copy bound to BINDINGS.
-BINDINGS is a list of `(VAR ACCESSOR)' pairs, e.g. `((graph :graph))'.
-The temp directory is deleted afterwards."
-  (declare (indent 1))
-  (let ((setup (cl-gensym "setup")))
-    `(let* ((,setup (logseq-org-sync-reconcile-test--markdown-setup))
-            ,@(mapcar (lambda (b) (list (car b) (list 'plist-get setup (cadr b))))
-                      bindings))
-       (unwind-protect
-           (progn ,@body)
-         (delete-directory (plist-get ,setup :tmp) t)))))
-
-(ert-deftest logseq-org-sync-reconcile--markdown-fresh-state-seeds ()
-  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph))
-    (let ((state (logseq-org-sync-reconcile-test--baseline graph)))
-      (should (= 3 (length (plist-get state :nodes))))
-      ;; The Markdown logseq paths are recorded with their native `.md'
-      ;; extension; the org-roam paths keep `.org'.
-      (should (equal "pages/Project Alpha.md"
-                     (plist-get (logseq-org-sync-state-get
-                                 state "10000000-0000-0000-0000-000000000001")
-                                :logseq-path)))
-      (should (equal "pages/Project Alpha.org"
-                     (plist-get (logseq-org-sync-state-get
-                                 state "10000000-0000-0000-0000-000000000001")
-                                :roam-path)))
-      (should (null (logseq-org-sync-reconcile-plan graph state))))))
-
-(ert-deftest logseq-org-sync-reconcile--markdown-new-on-logseq-creates-roam ()
-  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
-                                                        (lroot :logseq-root)
-                                                        (rroot :roam-root))
-    (let ((state (logseq-org-sync-reconcile-test--baseline graph)))
-      (write-region "id:: 10000000-0000-0000-0000-000000000004\n\n- New note [[Project Alpha]]\n"
-                    nil (expand-file-name "pages/New Note.md" lroot))
-      (let ((plan (logseq-org-sync-reconcile-plan graph state)))
-        (should (equal '(create-roam)
-                       (logseq-org-sync-reconcile-test--types plan)))
-        (should (equal "pages/New Note.org" (plist-get (car plan) :path)))
-        (setq state (logseq-org-sync-reconcile-apply graph state plan)))
-      (should (file-exists-p (expand-file-name "pages/New Note.org" rroot)))
-      (should-not (file-exists-p (expand-file-name "pages/New Note.md" rroot)))
-      (should (null (logseq-org-sync-reconcile-plan graph state))))))
-
-(ert-deftest logseq-org-sync-reconcile--markdown-new-on-roam-creates-logseq ()
-  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
-                                                        (lroot :logseq-root)
-                                                        (rroot :roam-root))
-    (let ((state (logseq-org-sync-reconcile-test--baseline graph)))
-      (write-region ":PROPERTIES:\n:ID: 10000000-0000-0000-0000-000000000005\n:END:\n#+title: Fresh\n\n* From roam [[id:10000000-0000-0000-0000-000000000001][Project Alpha]]\n"
-                    nil (expand-file-name "pages/Fresh.org" rroot))
-      (let ((plan (logseq-org-sync-reconcile-plan graph state)))
-        (should (equal '(create-logseq)
-                       (logseq-org-sync-reconcile-test--types plan)))
-        (should (equal "pages/Fresh.md" (plist-get (car plan) :path)))
-        (setq state (logseq-org-sync-reconcile-apply graph state plan)))
-      (should (file-exists-p (expand-file-name "pages/Fresh.md" lroot)))
-      (should-not (file-exists-p (expand-file-name "pages/Fresh.org" lroot)))
-      (should (null (logseq-org-sync-reconcile-plan graph state))))))
-
 (ert-deftest logseq-org-sync-reconcile--drops-empty-blocks ()
-  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
-                                                        (lroot :logseq-root)
-                                                        (rroot :roam-root))
+  (logseq-org-sync-reconcile-test--with-setup ((graph :graph)
+                                               (lroot :logseq-root)
+                                               (rroot :roam-root))
     (let ((logseq-org-sync-drop-empty-blocks t)
           (state (logseq-org-sync-reconcile-test--baseline graph)))
-      (write-region (concat "id:: 10000000-0000-0000-0000-000000000008\n\n"
-                            "- Parent\n"
-                            "\t- \n"
-                            "\t- Child\n")
-                    nil (expand-file-name "pages/Empty.md" lroot))
+      (write-region (concat "#+id: 10000000-0000-0000-0000-000000000008\n\n"
+                            "* Parent\n"
+                            "**\s\n"
+                            "** Child\n")
+                    nil (expand-file-name "pages/Empty.org" lroot))
       (let ((plan (logseq-org-sync-reconcile-plan graph state)))
         (should (equal '(create-roam)
                        (logseq-org-sync-reconcile-test--types plan)))
@@ -396,21 +291,21 @@ The temp directory is deleted afterwards."
                     (buffer-string))))
         (should (string-match-p (regexp-quote "* Parent") text))
         (should (string-match-p (regexp-quote "** Child") text))
-        ;; The empty bullet must not become an empty org headline.
+        ;; The empty headline must not be mirrored.
         (should-not (string-match-p "^\\*+[ \t]*$" text)))
       (should (null (logseq-org-sync-reconcile-plan graph state))))))
 
 (ert-deftest logseq-org-sync-reconcile--keeps-empty-blocks-when-configured ()
-  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
-                                                        (lroot :logseq-root)
-                                                        (rroot :roam-root))
+  (logseq-org-sync-reconcile-test--with-setup ((graph :graph)
+                                               (lroot :logseq-root)
+                                               (rroot :roam-root))
     (let ((logseq-org-sync-drop-empty-blocks nil)
           (state (logseq-org-sync-reconcile-test--baseline graph)))
-      (write-region (concat "id:: 10000000-0000-0000-0000-000000000008\n\n"
-                            "- Parent\n"
-                            "\t- \n"
-                            "\t- Child\n")
-                    nil (expand-file-name "pages/Empty.md" lroot))
+      (write-region (concat "#+id: 10000000-0000-0000-0000-000000000008\n\n"
+                            "* Parent\n"
+                            "**\s\n"
+                            "** Child\n")
+                    nil (expand-file-name "pages/Empty.org" lroot))
       (let ((plan (logseq-org-sync-reconcile-plan graph state)))
         (should (equal '(create-roam)
                        (logseq-org-sync-reconcile-test--types plan)))
@@ -491,17 +386,20 @@ The temp directory is deleted afterwards."
               reg)))))
 
 (ert-deftest logseq-org-sync-reconcile--block-reference-propagates-to-roam ()
-  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
-                                                        (lroot :logseq-root)
-                                                        (rroot :roam-root))
+  (logseq-org-sync-reconcile-test--with-setup ((graph :graph)
+                                               (lroot :logseq-root)
+                                               (rroot :roam-root))
     (let ((state (logseq-org-sync-reconcile-test--baseline graph))
           (block-uuid "11111111-1111-1111-1111-111111111111"))
       ;; A referenced block, and a page referencing/embedding it.
-      (write-region (concat "- Important block\n  id:: " block-uuid "\n")
-                    nil (expand-file-name "pages/Blocks.md" lroot))
-      (write-region (concat "- Reference ((" block-uuid "))\n"
-                            "- Embed {{embed ((" block-uuid "))}}\n")
-                    nil (expand-file-name "pages/Refs.md" lroot))
+      (write-region (concat "* Important block\n"
+                            ":PROPERTIES:\n"
+                            ":ID: " block-uuid "\n"
+                            ":END:\n")
+                    nil (expand-file-name "pages/Blocks.org" lroot))
+      (write-region (concat "* Reference ((" block-uuid "))\n"
+                            "* Embed {{embed ((" block-uuid "))}}\n")
+                    nil (expand-file-name "pages/Refs.org" lroot))
       (let ((plan (logseq-org-sync-reconcile-plan graph state)))
         (should (equal '(create-roam create-roam)
                        (logseq-org-sync-reconcile-test--types plan)))
@@ -524,9 +422,9 @@ The temp directory is deleted afterwards."
       (should (null (logseq-org-sync-reconcile-plan graph state))))))
 
 (ert-deftest logseq-org-sync-reconcile--block-reference-propagates-to-logseq ()
-  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
-                                                        (lroot :logseq-root)
-                                                        (rroot :roam-root))
+  (logseq-org-sync-reconcile-test--with-setup ((graph :graph)
+                                               (lroot :logseq-root)
+                                               (rroot :roam-root))
     (let ((state (logseq-org-sync-reconcile-test--baseline graph))
           (block-uuid "11111111-1111-1111-1111-111111111111"))
       ;; A referenced org-roam block, and a page linking/embedding it.
@@ -552,155 +450,21 @@ The temp directory is deleted afterwards."
         (setq state (logseq-org-sync-reconcile-apply graph state plan)))
       ;; The Logseq copy uses ((uuid)) / {{embed ((uuid))}}.
       (let ((text (with-temp-buffer
-                    (insert-file-contents (expand-file-name "pages/Refs.md" lroot))
+                    (insert-file-contents (expand-file-name "pages/Refs.org" lroot))
                     (buffer-string))))
         (should (string-match-p
                  (regexp-quote (format "((%s))" block-uuid)) text))
         (should (string-match-p
                  (regexp-quote (format "{{embed ((%s))}}" block-uuid)) text)))
-      ;; The org-roam heading :ID: became a Markdown block id::.
+      ;; The org-roam heading :ID: stays a Logseq block :ID:.
       (let ((text (with-temp-buffer
-                    (insert-file-contents (expand-file-name "pages/Blocks.md" lroot))
+                    (insert-file-contents (expand-file-name "pages/Blocks.org" lroot))
                     (buffer-string))))
-        (should (string-match-p (concat "id:: " block-uuid) text)))
-      (should (null (logseq-org-sync-reconcile-plan graph state))))))
-
-(ert-deftest logseq-org-sync-reconcile--translate-md-code-block-to-roam ()
-  (should (equal
-           '(:level 1 :text ""
-             :body "#+BEGIN_SRC elisp\n(+ 1 2)\n#+END_SRC")
-           (logseq-org-sync-reconcile--md-block-to-roam
-            '(:level 1 :text "```elisp" :body "(+ 1 2)\n```")))))
-
-(ert-deftest logseq-org-sync-reconcile--translate-md-fence-no-language-to-roam ()
-  (should (equal
-           '(:level 1 :text "" :body "#+BEGIN_SRC\n(+ 1 2)\n#+END_SRC")
-           (logseq-org-sync-reconcile--md-block-to-roam
-            '(:level 1 :text "```" :body "(+ 1 2)\n```")))))
-
-(ert-deftest logseq-org-sync-reconcile--translate-md-table-to-roam ()
-  (should (equal
-           '(:level 1 :text ""
-             :body "#+BEGIN_SRC markdown\n| a | b |\n| 1 | 2 |\n#+END_SRC")
-           (logseq-org-sync-reconcile--md-block-to-roam
-            '(:level 1 :text "| a | b |" :body "| 1 | 2 |")))))
-
-(ert-deftest logseq-org-sync-reconcile--translate-md-paragraph-verbatim ()
-  (should (equal
-           '(:level 1 :text "Plain" :body "line one\nline two")
-           (logseq-org-sync-reconcile--md-block-to-roam
-            '(:level 1 :text "Plain" :body "line one\nline two")))))
-
-(ert-deftest logseq-org-sync-reconcile--translate-roam-src-to-md ()
-  (should (equal
-           '(:level 1 :text "```elisp" :body "(+ 1 2)\n```")
-           (logseq-org-sync-reconcile--roam-block-to-logseq
-            '(:level 1 :text "Code"
-              :body "#+BEGIN_SRC elisp\n(+ 1 2)\n#+END_SRC")))))
-
-(ert-deftest logseq-org-sync-reconcile--translate-roam-table-to-md ()
-  (should (equal
-           '(:level 1 :text "| a | b |" :body "| 1 | 2 |")
-           (logseq-org-sync-reconcile--roam-block-to-logseq
-            '(:level 1 :text "Table"
-              :body "#+BEGIN_SRC markdown\n| a | b |\n| 1 | 2 |\n#+END_SRC")))))
-
-(ert-deftest logseq-org-sync-reconcile--markdown-body-propagates-to-roam ()
-  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
-                                                        (lroot :logseq-root)
-                                                        (rroot :roam-root))
-    (let ((state (logseq-org-sync-reconcile-test--baseline graph)))
-      (write-region (concat "id:: 10000000-0000-0000-0000-000000000006\n\n"
-                            "- ```elisp\n"
-                            "  (+ 1 2)\n"
-                            "  ```\n"
-                            "- | Syntax | Description |\n"
-                            "  | markdown | pipe table |\n")
-                    nil (expand-file-name "pages/Body.md" lroot))
-      (let ((plan (logseq-org-sync-reconcile-plan graph state)))
-        (should (equal '(create-roam)
-                       (logseq-org-sync-reconcile-test--types plan)))
-        (setq state (logseq-org-sync-reconcile-apply graph state plan)))
-      (let ((text (with-temp-buffer
-                    (insert-file-contents (expand-file-name "pages/Body.org" rroot))
-                    (buffer-string))))
-        (should (string-match-p
-                 (regexp-quote "#+BEGIN_SRC elisp\n(+ 1 2)\n#+END_SRC") text))
-        (should (string-match-p
-                 (regexp-quote
-                  "#+BEGIN_SRC markdown\n| Syntax | Description |\n| markdown | pipe table |\n#+END_SRC")
-                 text)))
-      (should (null (logseq-org-sync-reconcile-plan graph state))))))
-
-(ert-deftest logseq-org-sync-reconcile--markdown-body-propagates-to-logseq ()
-  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
-                                                        (lroot :logseq-root)
-                                                        (rroot :roam-root))
-    (let ((state (logseq-org-sync-reconcile-test--baseline graph)))
-      (write-region (concat ":PROPERTIES:\n"
-                            ":ID: 10000000-0000-0000-0000-000000000007\n"
-                            ":END:\n"
-                            "#+title: Body\n\n"
-                            "* Code\n"
-                            "#+BEGIN_SRC elisp\n(+ 1 2)\n#+END_SRC\n"
-                            "* Table\n"
-                            "#+BEGIN_SRC markdown\n| a | b |\n| 1 | 2 |\n#+END_SRC\n")
-                    nil (expand-file-name "pages/Body.org" rroot))
-      (let ((plan (logseq-org-sync-reconcile-plan graph state)))
-        (should (equal '(create-logseq)
-                       (logseq-org-sync-reconcile-test--types plan)))
-        (setq state (logseq-org-sync-reconcile-apply graph state plan)))
-      (let ((text (with-temp-buffer
-                    (insert-file-contents (expand-file-name "pages/Body.md" lroot))
-                    (buffer-string))))
-        (should (string-match-p (regexp-quote "```elisp\n  (+ 1 2)\n  ```") text))
-        (should (string-match-p
-                 (regexp-quote "| a | b |\n  | 1 | 2 |") text)))
-      (should (null (logseq-org-sync-reconcile-plan graph state))))))
-
-(ert-deftest logseq-org-sync-reconcile--markdown-block-tag-propagates-to-roam ()
-  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
-                                                        (lroot :logseq-root)
-                                                        (rroot :roam-root))
-    (let ((state (logseq-org-sync-reconcile-test--baseline graph)))
-      (write-region "id:: 10000000-0000-0000-0000-000000000006\n\n- Do the thing #todo\n"
-                    nil (expand-file-name "pages/Tagged.md" lroot))
-      (let ((plan (logseq-org-sync-reconcile-plan graph state)))
-        (should (equal '(create-roam)
-                       (logseq-org-sync-reconcile-test--types plan)))
-        (setq state (logseq-org-sync-reconcile-apply graph state plan)))
-      (let ((text (with-temp-buffer
-                    (insert-file-contents (expand-file-name "pages/Tagged.org" rroot))
-                    (buffer-string))))
-        ;; The inline #tag became an org-roam headline tag.
-        (should (string-match-p (regexp-quote "* Do the thing :todo:") text))
-        (should-not (string-match-p "#todo" text)))
-      (should (null (logseq-org-sync-reconcile-plan graph state))))))
-
-(ert-deftest logseq-org-sync-reconcile--markdown-block-tag-propagates-to-logseq ()
-  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
-                                                        (lroot :logseq-root)
-                                                        (rroot :roam-root))
-    (let ((state (logseq-org-sync-reconcile-test--baseline graph)))
-      (write-region (concat ":PROPERTIES:\n"
-                            ":ID: 10000000-0000-0000-0000-000000000007\n"
-                            ":END:\n"
-                            "#+title: Tagged\n\n"
-                            "* Do the thing :todo:\n")
-                    nil (expand-file-name "pages/Tagged.org" rroot))
-      (let ((plan (logseq-org-sync-reconcile-plan graph state)))
-        (should (equal '(create-logseq)
-                       (logseq-org-sync-reconcile-test--types plan)))
-        (setq state (logseq-org-sync-reconcile-apply graph state plan)))
-      (let ((text (with-temp-buffer
-                    (insert-file-contents (expand-file-name "pages/Tagged.md" lroot))
-                    (buffer-string))))
-        ;; The org-roam headline tag became an inline Markdown #tag.
-        (should (string-match-p (regexp-quote "- Do the thing #todo") text)))
+        (should (string-match-p (concat ":ID: " block-uuid) text)))
       (should (null (logseq-org-sync-reconcile-plan graph state))))))
 
 ;;; ---------------------------------------------------------------------------
-;;; Page, URL and file link translation (AGENTS.md §3)
+;;; Page and file link translation (AGENTS.md §3)
 ;;; ---------------------------------------------------------------------------
 
 (defun logseq-org-sync-reconcile-test--title-map (spec)
@@ -727,14 +491,6 @@ SPEC is a list of (UUID TITLE) entries."
              (logseq-org-sync-reconcile--translate-logseq-page-links
               "See [[Project Alpha]]" t2u)))))
 
-(ert-deftest logseq-org-sync-reconcile--translate-logseq-page-link-described ()
-  (let ((t2u (logseq-org-sync-reconcile-test--title-map
-              '(("meeting notes" "10000000-0000-0000-0000-000000000002")))))
-    (should (equal
-             "[[id:10000000-0000-0000-0000-000000000002][notes]]"
-             (logseq-org-sync-reconcile--translate-logseq-page-links
-              "[notes]([[Meeting Notes]])" t2u)))))
-
 (ert-deftest logseq-org-sync-reconcile--translate-logseq-page-link-dead ()
   (let ((t2u (logseq-org-sync-reconcile-test--title-map nil)))
     (should (equal "[[Missing]]"
@@ -756,61 +512,23 @@ SPEC is a list of (UUID TITLE) entries."
              "[[Meeting Notes]]"
              (logseq-org-sync-reconcile--translate-roam-page-links
               "[[id:10000000-0000-0000-0000-000000000002][Meeting Notes]]"
-              u2t nil)))
-    (should (equal
-             "[[Meeting Notes]]"
-             (logseq-org-sync-reconcile--translate-roam-page-links
-              "[[id:10000000-0000-0000-0000-000000000002][Meeting Notes]]"
-              u2t t)))))
+              u2t)))))
 
-(ert-deftest logseq-org-sync-reconcile--translate-roam-page-link-described ()
+(ert-deftest logseq-org-sync-reconcile--translate-roam-page-link-drops-description ()
   (let ((u2t (logseq-org-sync-reconcile-test--uuid-map
               '(("10000000-0000-0000-0000-000000000002" "Meeting Notes")))))
-    ;; Markdown preserves a differing description as [desc]([[Title]]).
-    (should (equal
-             "[MN]([[Meeting Notes]])"
-             (logseq-org-sync-reconcile--translate-roam-page-links
-              "[[id:10000000-0000-0000-0000-000000000002][MN]]" u2t t)))
     ;; org Logseq has no described page-link form, so the description drops.
     (should (equal
              "[[Meeting Notes]]"
              (logseq-org-sync-reconcile--translate-roam-page-links
-              "[[id:10000000-0000-0000-0000-000000000002][MN]]" u2t nil)))))
+              "[[id:10000000-0000-0000-0000-000000000002][MN]]" u2t)))))
 
 (ert-deftest logseq-org-sync-reconcile--translate-roam-page-link-dangling ()
   (let ((u2t (logseq-org-sync-reconcile-test--uuid-map nil)))
     (should (equal
              "[[id:99999999-9999-9999-9999-999999999999][X]]"
              (logseq-org-sync-reconcile--translate-roam-page-links
-              "[[id:99999999-9999-9999-9999-999999999999][X]]" u2t nil)))))
-
-(ert-deftest logseq-org-sync-reconcile--translate-markdown-url ()
-  (should (equal
-           "[[https://example.com][Example]]"
-           (logseq-org-sync-reconcile--translate-markdown-links
-            "[Example](https://example.com)" "/tmp/g" "pages/F.md"))))
-
-(ert-deftest logseq-org-sync-reconcile--translate-markdown-file ()
-  (should (equal
-           "[[file:/tmp/g/assets/a.png]]"
-           (logseq-org-sync-reconcile--translate-markdown-links
-            "![img](../assets/a.png)" "/tmp/g" "pages/F.md")))
-  (should (equal
-           "[[file:/tmp/g/assets/doc.pdf][Doc]]"
-           (logseq-org-sync-reconcile--translate-markdown-links
-            "[Doc](../assets/doc.pdf)" "/tmp/g" "pages/F.md"))))
-
-(ert-deftest logseq-org-sync-reconcile--translate-markdown-dead-page-untouched ()
-  (should (equal
-           "[x]([[Missing]])"
-           (logseq-org-sync-reconcile--translate-markdown-links
-            "[x]([[Missing]])" "/tmp/g" "pages/F.md"))))
-
-(ert-deftest logseq-org-sync-reconcile--translate-roam-url ()
-  (should (equal
-           "[Example](https://example.com) and <https://bare.com>"
-           (logseq-org-sync-reconcile--translate-roam-url-links
-            "[[https://example.com][Example]] and [[https://bare.com]]"))))
+              "[[id:99999999-9999-9999-9999-999999999999][X]]" u2t)))))
 
 (ert-deftest logseq-org-sync-reconcile--translate-logseq-org-file ()
   (should (equal
@@ -819,19 +537,12 @@ SPEC is a list of (UUID TITLE) entries."
             "[[file:../assets/a.png]] and [[file:../assets/d.pdf][D]]"
             "/tmp/g" "pages/F.org"))))
 
-(ert-deftest logseq-org-sync-reconcile--translate-roam-file-markdown ()
-  (should (equal
-           "![a.png](../assets/a.png) and [D](../assets/d.pdf)"
-           (logseq-org-sync-reconcile--translate-roam-file-links
-            "[[file:/tmp/g/assets/a.png]] and [[file:/tmp/g/assets/d.pdf][D]]"
-            t "/tmp/g" "pages/F.md"))))
-
 (ert-deftest logseq-org-sync-reconcile--translate-roam-file-org ()
   (should (equal
            "[[file:../assets/a.png]] and [[file:../assets/d.pdf][D]]"
            (logseq-org-sync-reconcile--translate-roam-file-links
             "[[file:/tmp/g/assets/a.png]] and [[file:/tmp/g/assets/d.pdf][D]]"
-            nil "/tmp/g" "pages/F.org"))))
+            "/tmp/g" "pages/F.org"))))
 
 (ert-deftest logseq-org-sync-reconcile--page-link-propagates-to-roam ()
   (logseq-org-sync-reconcile-test--with-setup ((graph :graph)
@@ -875,75 +586,6 @@ SPEC is a list of (UUID TITLE) entries."
         (should-not (string-match-p "id:10000000-0000-0000-0000-000000000001" text)))
       (should (null (logseq-org-sync-reconcile-plan graph state))))))
 
-(ert-deftest logseq-org-sync-reconcile--markdown-page-link-propagates-to-roam ()
-  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
-                                                        (lroot :logseq-root)
-                                                        (rroot :roam-root))
-    (let ((state (logseq-org-sync-reconcile-test--baseline graph)))
-      (write-region (concat "id:: 10000000-0000-0000-0000-000000000004\n\n"
-                            "- See [PA]([[Project Alpha]]) and [[Meeting Notes]]\n")
-                    nil (expand-file-name "pages/New.md" lroot))
-      (let ((plan (logseq-org-sync-reconcile-plan graph state)))
-        (should (equal '(create-roam)
-                       (logseq-org-sync-reconcile-test--types plan)))
-        (setq state (logseq-org-sync-reconcile-apply graph state plan)))
-      (let ((text (with-temp-buffer
-                    (insert-file-contents (expand-file-name "pages/New.org" rroot))
-                    (buffer-string))))
-        (should (string-match-p
-                 (regexp-quote
-                  "[[id:10000000-0000-0000-0000-000000000001][PA]]")
-                 text))
-        (should (string-match-p
-                 (regexp-quote
-                  "[[id:10000000-0000-0000-0000-000000000002][Meeting Notes]]")
-                 text)))
-      (should (null (logseq-org-sync-reconcile-plan graph state))))))
-
-(ert-deftest logseq-org-sync-reconcile--markdown-url-and-file-propagate-to-roam ()
-  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
-                                                        (lroot :logseq-root)
-                                                        (rroot :roam-root))
-    (let ((state (logseq-org-sync-reconcile-test--baseline graph))
-          (asset (expand-file-name "assets/doc.pdf" lroot)))
-      (write-region (concat "id:: 10000000-0000-0000-0000-000000000006\n\n"
-                            "- [Example](https://example.com)\n"
-                            "- [Doc](../assets/doc.pdf)\n")
-                    nil (expand-file-name "pages/Links.md" lroot))
-      (let ((plan (logseq-org-sync-reconcile-plan graph state)))
-        (should (equal '(create-roam)
-                       (logseq-org-sync-reconcile-test--types plan)))
-        (setq state (logseq-org-sync-reconcile-apply graph state plan)))
-      (let ((text (with-temp-buffer
-                    (insert-file-contents (expand-file-name "pages/Links.org" rroot))
-                    (buffer-string))))
-        (should (string-match-p (regexp-quote "[[https://example.com][Example]]") text))
-        (should (string-match-p
-                 (regexp-quote (format "[[file:%s][Doc]]" asset)) text)))
-      (should (null (logseq-org-sync-reconcile-plan graph state))))))
-
-(ert-deftest logseq-org-sync-reconcile--markdown-file-link-propagates-to-logseq ()
-  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
-                                                        (lroot :logseq-root)
-                                                        (rroot :roam-root))
-    (let ((state (logseq-org-sync-reconcile-test--baseline graph))
-          (asset (expand-file-name "assets/doc.pdf" lroot)))
-      (write-region (concat ":PROPERTIES:\n"
-                            ":ID: 10000000-0000-0000-0000-000000000007\n"
-                            ":END:\n"
-                            "#+title: Links\n\n"
-                            "* Doc [[file:" asset "][Doc]]\n")
-                    nil (expand-file-name "pages/Links.org" rroot))
-      (let ((plan (logseq-org-sync-reconcile-plan graph state)))
-        (should (equal '(create-logseq)
-                       (logseq-org-sync-reconcile-test--types plan)))
-        (setq state (logseq-org-sync-reconcile-apply graph state plan)))
-      (let ((text (with-temp-buffer
-                    (insert-file-contents (expand-file-name "pages/Links.md" lroot))
-                    (buffer-string))))
-        (should (string-match-p (regexp-quote "[Doc](../assets/doc.pdf)") text)))
-      (should (null (logseq-org-sync-reconcile-plan graph state))))))
-
 (ert-deftest logseq-org-sync-reconcile--org-file-link-propagates-to-roam ()
   (logseq-org-sync-reconcile-test--with-setup ((graph :graph)
                                                (lroot :logseq-root)
@@ -961,143 +603,6 @@ SPEC is a list of (UUID TITLE) entries."
                     (buffer-string))))
         (should (string-match-p
                  (regexp-quote (format "[[file:%s][Doc]]" asset)) text)))
-      (should (null (logseq-org-sync-reconcile-plan graph state))))))
-
-;;; Emphasis translation (AGENTS.md §9.11, §11.4)
-
-(ert-deftest logseq-org-sync-reconcile--translate-md-emphasis-basic ()
-  (logseq-org-sync-reconcile-test--require-markdown-grammar)
-  (should (equal "*bold*"
-                 (logseq-org-sync-reconcile--translate-md-emphasis "**bold**")))
-  (should (equal "/italic/"
-                 (logseq-org-sync-reconcile--translate-md-emphasis "*italic*")))
-  (should (equal "+strike+"
-                 (logseq-org-sync-reconcile--translate-md-emphasis "~~strike~~")))
-  (should (equal "~code~"
-                 (logseq-org-sync-reconcile--translate-md-emphasis "`code`"))))
-
-(ert-deftest logseq-org-sync-reconcile--translate-md-emphasis-inline ()
-  (logseq-org-sync-reconcile-test--require-markdown-grammar)
-  (should (equal "hello *bold* and /italic/ and +strike+ and ~code~ tail"
-                 (logseq-org-sync-reconcile--translate-md-emphasis
-                  "hello **bold** and *italic* and ~~strike~~ and `code` tail"))))
-
-(ert-deftest logseq-org-sync-reconcile--translate-md-emphasis-preserves-block-refs ()
-  (logseq-org-sync-reconcile-test--require-markdown-grammar)
-  (should (equal "a *bold* b ((uuid)) c"
-                 (logseq-org-sync-reconcile--translate-md-emphasis
-                  "a **bold** b ((uuid)) c"))))
-
-(ert-deftest logseq-org-sync-reconcile--translate-md-emphasis-skips-underscore ()
-  (logseq-org-sync-reconcile-test--require-markdown-grammar)
-  (should (equal "__bold__ and _italic_"
-                 (logseq-org-sync-reconcile--translate-md-emphasis
-                  "__bold__ and _italic_"))))
-
-(ert-deftest logseq-org-sync-reconcile--translate-org-emphasis-basic ()
-  (should (equal "**bold**"
-                 (logseq-org-sync-reconcile--translate-org-emphasis "*bold*")))
-  (should (equal "*italic*"
-                 (logseq-org-sync-reconcile--translate-org-emphasis "/italic/")))
-  (should (equal "~~strike~~"
-                 (logseq-org-sync-reconcile--translate-org-emphasis "+strike+")))
-  (should (equal "`code`"
-                 (logseq-org-sync-reconcile--translate-org-emphasis "~code~"))))
-
-(ert-deftest logseq-org-sync-reconcile--translate-org-emphasis-inline ()
-  (should (equal "hello **bold** *italic* ~~strike~~ `code`"
-                 (logseq-org-sync-reconcile--translate-org-emphasis
-                  "hello *bold* /italic/ +strike+ ~code~"))))
-
-(ert-deftest logseq-org-sync-reconcile--translate-org-emphasis-preserves-file-links ()
-  (should (equal "[[file:/a/b][x/y]]"
-                 (logseq-org-sync-reconcile--translate-org-emphasis
-                  "[[file:/a/b][x/y]]"))))
-
-(ert-deftest logseq-org-sync-reconcile--node-to-roam-translates-emphasis ()
-  (logseq-org-sync-reconcile-test--require-markdown-grammar)
-  (let ((node '(:title "T" :content ((:level 1 :text "**bold** *italic*"))))
-        (reg (make-hash-table :test #'equal))
-        (t2u (make-hash-table :test #'equal)))
-    (should (equal "*bold* /italic/"
-                   (plist-get
-                    (car (plist-get
-                          (logseq-org-sync-reconcile--node-to-roam
-                           node reg t2u t "/tmp/g" "pages/F.md")
-                          :content))
-                    :text)))))
-
-(ert-deftest logseq-org-sync-reconcile--node-to-roam-emphasis-disabled ()
-  (logseq-org-sync-reconcile-test--require-markdown-grammar)
-  (let ((logseq-org-sync-translate-emphasis nil)
-        (node '(:title "T" :content ((:level 1 :text "**bold** *italic*"))))
-        (reg (make-hash-table :test #'equal))
-        (t2u (make-hash-table :test #'equal)))
-    (should (equal "**bold** *italic*"
-                   (plist-get
-                    (car (plist-get
-                          (logseq-org-sync-reconcile--node-to-roam
-                           node reg t2u t "/tmp/g" "pages/F.md")
-                          :content))
-                    :text)))))
-
-(ert-deftest logseq-org-sync-reconcile--node-to-logseq-translates-emphasis ()
-  (let ((node '(:title "T" :content ((:level 1 :text "*bold* /italic/"))))
-        (reg (make-hash-table :test #'equal))
-        (u2t (make-hash-table :test #'equal)))
-    (should (equal "**bold** *italic*"
-                   (plist-get
-                    (car (plist-get
-                          (logseq-org-sync-reconcile--node-to-logseq
-                           node reg u2t t "/tmp/g" "pages/F.md")
-                          :content))
-                    :text)))))
-
-(ert-deftest logseq-org-sync-reconcile--markdown-emphasis-propagates-to-roam ()
-  (logseq-org-sync-reconcile-test--require-markdown-grammar)
-  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
-                                                        (lroot :logseq-root)
-                                                        (rroot :roam-root))
-    (let ((state (logseq-org-sync-reconcile-test--baseline graph)))
-      (write-region (concat "id:: 10000000-0000-0000-0000-000000000004\n\n"
-                            "- See **bold** and *italic* and ~~strike~~ and `code`\n")
-                    nil (expand-file-name "pages/Emph.md" lroot))
-      (let ((plan (logseq-org-sync-reconcile-plan graph state)))
-        (should (equal '(create-roam)
-                       (logseq-org-sync-reconcile-test--types plan)))
-        (setq state (logseq-org-sync-reconcile-apply graph state plan)))
-      (let ((text (with-temp-buffer
-                    (insert-file-contents (expand-file-name "pages/Emph.org" rroot))
-                    (buffer-string))))
-        (should (string-match-p (regexp-quote "*bold*") text))
-        (should (string-match-p (regexp-quote "/italic/") text))
-        (should (string-match-p (regexp-quote "+strike+") text))
-        (should (string-match-p (regexp-quote "~code~") text))
-        (should-not (string-match-p (regexp-quote "**bold**") text)))
-      (should (null (logseq-org-sync-reconcile-plan graph state))))))
-
-(ert-deftest logseq-org-sync-reconcile--markdown-emphasis-propagates-to-logseq ()
-  (logseq-org-sync-reconcile-test--with-markdown-setup ((graph :graph)
-                                                        (lroot :logseq-root)
-                                                        (rroot :roam-root))
-    (let ((state (logseq-org-sync-reconcile-test--baseline graph)))
-      (write-region (concat ":PROPERTIES:\n"
-                            ":ID: 10000000-0000-0000-0000-000000000005\n"
-                            ":END:\n"
-                            "#+title: Emph\n\n"
-                            "* See *bold* /italic/ +strike+ ~code~\n")
-                    nil (expand-file-name "pages/Emph.org" rroot))
-      (let ((plan (logseq-org-sync-reconcile-plan graph state)))
-        (should (equal '(create-logseq)
-                       (logseq-org-sync-reconcile-test--types plan)))
-        (setq state (logseq-org-sync-reconcile-apply graph state plan)))
-      (let ((text (with-temp-buffer
-                    (insert-file-contents (expand-file-name "pages/Emph.md" lroot))
-                    (buffer-string))))
-        (should (string-match-p (regexp-quote "**bold**") text))
-        (should (string-match-p (regexp-quote "*italic*") text))
-        (should (string-match-p (regexp-quote "~~strike~~") text))
-        (should (string-match-p (regexp-quote "`code`") text)))
       (should (null (logseq-org-sync-reconcile-plan graph state))))))
 
 (provide 'logseq-org-sync-reconcile-test)

@@ -1,6 +1,0 @@
-id:: 10000000-0000-0000-0000-000000000001
-alias:: Alpha, ProjA
-
-- TODO Draft the proposal
-	- Share with [[Meeting Notes]]
-- DONE Ship the first milestone

@@ -1,14 +1,19 @@
-# Two-Way Sync: Logseq Graph ↔ Org-roam
+# Logseq ↔ Org-roam: Sync + Pandoc Import/Export
 
 ## Project goal
 
-Build a **two-way sync** in Emacs Lisp between:
+Provide two related Emacs Lisp tools:
 
-- a **Logseq graph** directory (the source of truth for Logseq), and
-- an **org-roam** directory (the source of truth for Emacs).
+- a **two-way sync** between a **Logseq `.org` graph** directory and an
+  **org-roam** directory. Changes made in either directory propagate to the
+  other, without clobbering work done on the other side.
+- **Pandoc import/export** between a **Logseq Markdown graph** directory and
+  an org-roam directory. This is a one-shot, batch conversion (not a live
+  sync), using Pandoc and the Lua filters in `filters/`.
 
-Changes made in either directory propagate to the other, without clobbering work
-done on the other side.
+The sync engine handles Logseq **org** graphs only. Logseq Markdown graphs are
+no longer synced; they are imported/exported through the pandoc backend
+(`logseq-org-sync-pd.el`, `PANDOC-TRANSLATE.md`).
 
 The directory currently contains:
 
@@ -29,7 +34,7 @@ The directory currently contains:
     `mocker` library; the top-level `logseq-org-roam` command is untested).
   - `legacy/README.md` — the legacy package README.
 - `logseq-org-sync-logseq.el` — the Phase 2 Logseq-side scanner/parser/writer
-  (`logseq .org ↔ IR` and `logseq Markdown ↔ IR`; see §9.8).
+  (`logseq .org ↔ IR`; see §9.8). Markdown parsing/writing has been removed.
 - `logseq-org-sync-roam.el` — the Phase 3 org-roam-side scanner/parser/writer
   (`org-roam .org ↔ IR`; see §9.9).
 - `logseq-org-sync-identity.el` — the Phase 4 node identity (UUID) assignment
@@ -42,6 +47,13 @@ The directory currently contains:
   preview, pre-overwrite backup, updated hook; see §9.12).
 - `logseq-org-sync.el` — the Phase 7 command/triggering layer (interactive
   command, `after-save-hook`, file-notify watchers; see §9.13).
+- `logseq-org-sync-pd.el` — the pandoc-based Logseq Markdown ↔ org-roam
+  import/export backend (see `PANDOC-TRANSLATE.md`).
+- `filters/` — the pandoc Lua filters (`logseq-to-org.lua`,
+  `org-to-logseq.lua`).
+- `tests-pandoc/` — pandoc filter forward/reverse test inputs and expected
+  outputs.
+- `convert-graph.sh` — batch-converts a Logseq Markdown graph with pandoc.
 - `tests/` — ERT test suites for the sync engine:
   - `tests/logseq-org-sync-logseq-test.el` (scanner, parser, round-trip).
   - `tests/logseq-org-sync-roam-test.el` (scanner, parser, round-trip).
@@ -61,13 +73,13 @@ The directory currently contains:
   :triple-lowbar`, and default journal filenames `yyyy_MM_dd`.  Its page
   properties were corrected to the canonical org form (`#+KEY:` in-buffer
   settings; see §3), not the markdown `key::` form.
-- `LOGSEQ-FORMAT.md`, `ORG-ROAM-FORMAT` — format references for the Logseq
-  `.org`/`.md` and org-roam `.org` sides, respectively (grounded in the `og/`
+- `LOGSEQ-FORMAT.org`, `ORG-ROAM-FORMAT.org` — format references for the
+  Logseq `.org` and org-roam `.org` sides, respectively (grounded in the `og/`
   Logseq source).
-- `fixtures/` — the Phase 0 fixtures: paired `Work` graphs — `Work/logseq/` a
-  native Logseq `.org` graph, `Work-markdown/logseq/` a native Logseq Markdown
-  graph, and matching `org-roam/` mirrors — plus `fixtures/README.md`
-  documenting the mapping, UUID legend, and round-trip contract.
+- `fixtures/` — the Phase 0 fixtures: a paired `Work` graph — `Work/logseq/`
+  a native Logseq `.org` graph and a matching `org-roam/` mirror — plus
+  `fixtures/README.md` documenting the mapping, UUID legend, and round-trip
+  contract.
 - `Makefile`, `LICENSE`.
 
 ---
@@ -78,9 +90,10 @@ The directory currently contains:
    tool. A sync engine reads both and translates at the boundary. This replaces
    the current single-shared-directory model.
 
-2. **Logseq side is `.org` or `.md`.** The sync detects the graph format from
-   its `config.edn`: an active `:preferred-format "Org"` setting means `.org`;
-   otherwise `.md` (see §9.8).
+2. **Logseq sync side is `.org` only.** The sync engine only handles Logseq
+   graphs whose `config.edn` selects the org format (`:preferred-format
+   "Org"`). Logseq Markdown graphs are imported/exported through the pandoc
+   backend (`logseq-org-sync-pd`) rather than synced.
 
 3. **Link strategy — each side native, sync translates.**
    - org-roam tree uses `[[id:uuid][Title]]` links (backlinks/graph work).
@@ -90,7 +103,6 @@ The directory currently contains:
 4. **Shared identity — the org-roam `:ID:` UUID.**
    - org-roam side: `:ID: <uuid>` property.
    - Logseq org side: `#+id: <uuid>` page property (an org in-buffer setting).
-   - Logseq Markdown side: `id:: <uuid>` page property.
 
 5. **Content scope — basics first.** Identity → title/aliases → structure
    (blocks ↔ headings) → links → block refs/embeds (see §6). Deferred: asset
@@ -145,11 +157,9 @@ org-roam-directory/
 <state-store>                 ;; one small metadata file (see §4)
 ```
 
-The mapping is **1:1 on the relative path within a graph**, with only the
-extension changing for Markdown graphs:
+The mapping is **1:1 on the relative path within a graph**:
 
 - `<logseq-root>/Work/pages/Foo.org` ↔ `<org-roam-directory>/Work/pages/Foo.org`
-- `<logseq-root>/Work/pages/Foo.md`  ↔ `<org-roam-directory>/Work/pages/Foo.org`
 - `<logseq-root>/Work/journals/2024-01-01.org` ↔ `<org-roam-directory>/Work/journals/2024-01-01.org`
 
 This makes path discovery deterministic; the state store is for change
@@ -198,7 +208,6 @@ Every note has a stable UUID present on **both** sides:
 |---|---|---|
 | org-roam | `:ID: <uuid>` | `[[id:uuid][Title]]` |
 | Logseq `.org` | `#+id: <uuid>` | `[[Title]]` |
-| Logseq Markdown | `id:: <uuid>` | `[[Title]]` |
 
 The sync translates links in both directions using the UUID map:
 
@@ -212,25 +221,14 @@ Edge cases (reusing the existing package's logic):
   UUID, and converts the link.
 - **Ambiguous title/alias** (two nodes share one): leave that link un-converted
   on both sides (the existing fuzzy-dict conflict handling).
-- **Markdown described page links**: `[Label]([[Title]])` becomes
-  `[[id:uuid][Label]]`; the reverse restores `[Label]([[Title]])` when the
-  description differs from the page title (otherwise the plain `[[Title]]`
-  form).  Logseq `.org` has no described page-link form, so a differing
-  description is dropped on that side.
-- **External URLs**: org-format graphs already share org link syntax, so URLs
-  pass through.  For Markdown graphs the reconciler converts
-  `[Label](https://…)` ↔ `[[https://…][Label]]`, and a bare `[[https://…]]`
-  becomes a Markdown autolink `<https://…>` (and back).
-- **File links**: the syntax is converted for Markdown graphs
-  (`[Label](path)` / `![alt](path)` ↔ `[[file:path][Label]]` /
-  `[[file:path]]`), and in **both** formats a relative file path on the Logseq
-  side is resolved to an **absolute** path on the org-roam side pointing at the
-  real file location (the Logseq graph's `assets/` directory); the reverse
-  restores a page-relative link back into the local graph's `assets/`
-  directory.  Assets are therefore *referenced*, never copied or moved.
-  Markdown image alt text is not representable in an org file link, so it is
-  not preserved across a round-trip (see §11).  Block refs/embeds are handled
-  separately (§6).
+- **External URLs**: both sides share org link syntax, so URLs pass through
+  unchanged.
+- **File links**: a relative `[[file:path]]` link on the Logseq side is
+  resolved to an **absolute** path on the org-roam side pointing at the real
+  file location (the Logseq graph's `assets/` directory); the reverse restores
+  a page-relative link back into the local graph's `assets/` directory.
+  Assets are therefore *referenced*, never copied or moved.  Block
+  refs/embeds are handled separately (§6).
 
 ---
 
@@ -283,18 +281,18 @@ Converters come in pure-ish pairs, each unit-testable:
 
 Translation table:
 
-| Concern | Logseq `.org` | Logseq Markdown | IR | org-roam |
-|---|---|---|---|---|
-| Identity | `#+id: <uuid>` | `id:: <uuid>` | `:id` | `:ID: <uuid>` |
-| Title | filename slug; `#+title:` overrides | filename slug; `title::` overrides | `:title` | `#+title:` |
-| Aliases | `#+alias: a, b` | `alias:: a, b` | `:aliases` | `:ROAM_ALIASES:` |
-| Tags | `#+tags: a, b` and/or `#+filetags: :a:b:` | `tags:: a, b` | `:tags` | `#+filetags: :a:b:` |
-| Links | `[[Title]]` | `[[Title]]` / `[desc]([[Title]])` | `:links` | `[[id:uuid][Title]]` |
-| Block refs | `((uuid))` / `{{embed ((uuid))}}` | `((uuid))` / `{{embed ((uuid))}}` | block `:text` (translated at sync) | `[[id:uuid][block text]]` / `[[id:uuid][#embed block text]]` |
-| Structure | headlines (outliner) | indented list items (outliner) | `:content` blocks | headings/document |
-| Block body | section body | indented continuation lines | `:body` (string; planned §11.1) | section body; Markdown tables wrap in `#+BEGIN_SRC markdown` (§11.2) |
-| TODO | org TODO keywords (`TODO`/`DOING`/`DONE`) | `TODO`/`DOING`/`DONE`/… prefix | `:todo` | org TODO keywords |
-| Dates | `SCHEDULED:`/`DEADLINE:` | `SCHEDULED:`/`DEADLINE:` | `:scheduled`/`:deadline` | org timestamps |
+| Concern | Logseq `.org` | IR | org-roam |
+|---|---|---|---|
+| Identity | `#+id: <uuid>` | `:id` | `:ID: <uuid>` |
+| Title | filename slug; `#+title:` overrides | `:title` | `#+title:` |
+| Aliases | `#+alias: a, b` | `:aliases` | `:ROAM_ALIASES:` |
+| Tags | `#+tags: a, b` and/or `#+filetags: :a:b:` | `:tags` | `#+filetags: :a:b:` |
+| Links | `[[Title]]` | `:links` | `[[id:uuid][Title]]` |
+| Block refs | `((uuid))` / `{{embed ((uuid))}}` | block `:text` (translated at sync) | `[[id:uuid][block text]]` / `[[id:uuid][#embed block text]]` |
+| Structure | headlines (outliner) | `:content` blocks | headings/document |
+| Block body | section body | `:body` | section body |
+| TODO | org TODO keywords (`TODO`/`DOING`/`DONE`) | `:todo` | org TODO keywords |
+| Dates | `SCHEDULED:`/`DEADLINE:` | `:scheduled`/`:deadline` | org timestamps |
 
 ---
 
@@ -307,8 +305,8 @@ Logseq has two block-level reference types:
 2. **Block embed** `{{embed ((uuid))}}` — shows the block with its children,
    editable, changes propagate.
 
-Both key off a block's identity property: Markdown `id:: uuid`, or org
-`:PROPERTIES:` `:ID: uuid`.
+Both key off a block's identity property: an org `:PROPERTIES:` drawer
+carrying `:ID: <uuid>`.
 
 The reconciler **adopts the Logseq block `:id:` as the org-roam heading `:ID:`**
 (same UUID), and translates references in both directions using a block
@@ -339,8 +337,8 @@ the embed/reference distinction survives a round-trip.
 
 ## 7. Sync algorithm (each run)
 
-1. **Scan** the Logseq `pages/` + `journals/` (`.org` or `.md`, per the graph
-   format) and the org-roam mirror's `pages/` + `journals/` (`.org`).
+1. **Scan** the Logseq `pages/` + `journals/` (`.org`) and the org-roam
+   mirror's `pages/` + `journals/` (`.org`).
 2. **Hash** every file (SHA-256) and compare against the state store.
 3. **Classify** each node by UUID (fall back to `path:` matching for nodes
    lacking an ID):
@@ -489,16 +487,15 @@ by `--parse-buffer--idempotent`).
 
 The Logseq side of the two-way sync engine.  It is a new, self-contained
 package (namespace `logseq-org-sync-*`) that requires only `org`, `org-element`,
-`cl-lib`, `subr-x`, and `treesit` — it does not reuse the legacy
-`logseq-org-roam` code.  It handles both Logseq `.org` graphs and Logseq
-Markdown graphs.
+`cl-lib`, and `subr-x` — it does not reuse the legacy `logseq-org-roam` code.
+It handles Logseq `.org` graphs only.
 
 **Graph format detection.**  `logseq-org-sync-logseq-graph-format` reads
 `<root>/logseq/config.edn` (falling back to `<root>/config.edn`), drops `;;`
 comment lines, and looks for `:preferred-format` followed by whitespace and
-`"Org"`.  If present the graph is org; otherwise it is Markdown.  `-scan`,
-`-parse-file`, and `-write` use that format (or the file extension) to choose
-the `.org` or `.md` implementation.
+`"Org"`.  If present the graph is org; otherwise it is Markdown (which the sync
+engine does not handle).  `-scan`, `-parse-file`, and `-write` always use the
+`.org` implementation.
 
 **Canonical Logseq `.org` format.**  Page properties are org in-buffer settings
 and blocks are org headlines:
@@ -516,28 +513,7 @@ and blocks are org headlines:
 ```
 
 Block properties live in a `:PROPERTIES:` drawer on the block's own headline.
-This is the org-mode form of Logseq properties (the markdown form is
-`id::`/`alias::`/`key::`; the `.org` graph uses `#+id:`/`#+alias:`/`#+key:`).
-
-**Canonical Logseq Markdown format.**  Page properties are leading `key:: value`
-lines and blocks are indented unordered list items:
-
-```
-id:: <uuid>            ;; optional identity
-alias:: a, b           ;; optional aliases
-tags:: a, b            ;; optional page tags
-<other>:: value        ;; arbitrary page props
-
-- TODO block text [[Page]]
-	- child text
-```
-
-Block properties and planning lines are continuation lines indented under
-their block (`  key:: value`, `  SCHEDULED: <...>`).  Visual heading blocks
-(`# Heading` or `- # Heading`) are normalized to a `heading` block property,
-mirroring the `.org` side.  The Markdown parser uses the `markdown-inline`
-tree-sitter grammar for link extraction when it is available, with a regexp
-fallback otherwise.
+This is the org-mode form of Logseq properties (`#+id:`/`#+alias:`/`#+key:`).
 
 **IR schema.**  A node is a plist with deterministic key order (nil keys are
 omitted):
@@ -568,11 +544,10 @@ A block is a plist with deterministic key order (nil keys omitted):
   with planning/properties excluded), or omitted.
 - `:children` — list of nested block plists, or omitted.
 
-**Public functions:** `logseq-org-sync-logseq-scan` (sorted absolute `.org` or
-`.md` paths under `pages/` + `journals/`), `logseq-org-sync-logseq-parse-file`,
-`logseq-org-sync-logseq-format`, `logseq-org-sync-logseq-write`,
-`logseq-org-sync-logseq-graph-format`, and the Markdown-specific
-`logseq-org-sync-logseq-markdown-parse-buffer/-parse-file/-format/-write`.
+**Public functions:** `logseq-org-sync-logseq-scan` (sorted absolute `.org`
+paths under `pages/` + `journals/`), `logseq-org-sync-logseq-parse-file`,
+`logseq-org-sync-logseq-format`, `logseq-org-sync-logseq-write`, and
+`logseq-org-sync-logseq-graph-format`.
 
 **Known limitations** (documented in the module commentary):
 
@@ -586,17 +561,9 @@ A block is a plist with deterministic key order (nil keys omitted):
 - Fuzzy-link collection skips org-internal links (`[[#custom-id]]`,
   `[[*heading]]`); image/asset links are not specially handled (deferred, §11).
 - Block bodies beyond the first line (tables, code fences, multi-line text)
-  round-trip through the block's `:body` field: byte-for-byte same-format
-  (`.org ↔ .org` and Markdown ↔ Markdown), and cross-format for fenced code
-  blocks and Markdown tables (§11.1/§11.2).  Other body constructs cross
-  formats verbatim.  A block keeps its first line (`:text`), TODO marker,
-  `:tags`, block `:properties`, `SCHEDULED:`/`DEADLINE:` lines, `:body`, and
-  `:children`.
-- Markdown block tags (`#tag` / `#[[multi-word tag]]`) are stripped from the
-  block's first line into the IR `:tags` field (multi-word tags use the
-  underscore spelling org requires); the Markdown writer emits `:tags` back as
-  `#tag`.  org headline tags (`:tag:`) already map to `:tags` on both org
-  sides.  See §11.3.
+  round-trip through the block's `:body` field byte-for-byte.  A block keeps
+  its first line (`:text`), TODO marker, `:tags`, block `:properties`,
+  `SCHEDULED:`/`DEADLINE:` lines, `:body`, and `:children`.
 
 ### 9.9 Phase 3 module — `logseq-org-sync-roam.el`
 
@@ -714,11 +681,9 @@ pair (AGENTS.md §2):
 ```
 
 The two roots hold identically-named `pages/` and `journals/` subtrees, so a
-node's path relative to its root is the same on both sides (1:1 mapping).  For
-Markdown graphs the Logseq side uses `.md` while the org-roam side stays
-`.org`; the reconciler maps extensions back and forth when building actions
-and state records (`logseq-org-sync-reconcile--roam-path` /
-`--logseq-path`).
+node's path relative to its root is the same on both sides (1:1 mapping).
+Both sides use `.org`, so `logseq-org-sync-reconcile--roam-path` /
+`--logseq-path` are identity mappings.
 
 **Node tables (internal).**  Each side is read into a hash table keyed by UUID
 (files without a `:id` fall back to a `path:` key).  A table value is
@@ -786,43 +751,17 @@ direction maps a `[[id:uuid][...]]` link whose UUID is in the registry back to
 untouched.  Because the description is regenerated from the registry, the
 embed/reference distinction round-trips losslessly.
 
-**Page, URL and file links (AGENTS.md §3).**  In the same `--translate-plan`
-pass, `-plan` builds a title→UUID map and a UUID→title map from both node
-tables, then rewrites page links in each create/update node for its target
-side: Logseq `[[Title]]` / `[Label]([[Title]])` become `[[id:uuid][Title]]` /
-`[[id:uuid][Label]]`, and org-roam `[[id:uuid][desc]]` becomes `[[Title]]`
-(or a Markdown described link when the description differs).  Dead and
-ambiguous page links stay as fuzzy links.  For Markdown graphs it also converts
-external URL links (`[Label](https://…)` ↔ `[[https://…][Label]]`) and file
-links (`[Label](path)` / `![alt](path)` ↔ `[[file:path][Label]]` /
-`[[file:path]]`).  File-link paths are remapped in **both** graph formats: a
-Logseq-relative path is resolved to an absolute path pointing at the real
-Logseq asset location on the org-roam side, and the reverse restores a
-page-relative link back into the local graph's `assets/` directory.  Assets
+**Page and file links (AGENTS.md §3).**  In the same `--translate-plan` pass,
+`-plan` builds a title→UUID map and a UUID→title map from both node tables,
+then rewrites page links in each create/update node for its target side:
+Logseq `[[Title]]` becomes `[[id:uuid][Title]]`, and org-roam
+`[[id:uuid][desc]]` becomes `[[Title]]` (the description is dropped, since org
+Logseq has no described page-link form).  Dead and ambiguous page links stay
+as fuzzy links.  File-link paths are remapped in both directions: a
+Logseq-relative `[[file:...]]` path is resolved to an absolute path pointing at
+the real Logseq asset location on the org-roam side, and the reverse restores
+a page-relative link back into the local graph's `assets/` directory.  Assets
 are referenced, never copied.
-
-**Emphasis translation (AGENTS.md §11.4).**  For Markdown graphs only,
-`-plan` also translates inline emphasis on each block's `:text` (its first
-line): Markdown `**bold**` / `*italic*` / `~~strike~~` / `` `code` `` become
-org `*bold*` / `/italic/` / `+strike+` / `~code~` on the org-roam side, and
-the reverse restores the Markdown spellings.  The Markdown direction is parsed
-with the `markdown-inline` tree-sitter grammar
-(`logseq-org-sync-reconcile--translate-md-emphasis`); when that grammar is not
-available the Markdown emphasis is left verbatim.  The org direction uses
-`org-element` (`--translate-org-emphasis`).  Translation is controlled by
-`logseq-org-sync-translate-emphasis` (non-nil by default).  Nested/combined
-emphasis, underscore emphasis, and emphasis inside an org link description are
-left verbatim (AGENTS.md §11.4).
-
-**Cross-format block bodies (AGENTS.md §11.1 step 6, §11.2).**  For Markdown
-graphs only, `-plan` also translates each block's `:body` for its target side:
-Logseq Markdown fenced code blocks become `#+BEGIN_SRC` blocks and Markdown
-pipe tables are wrapped verbatim in `#+BEGIN_SRC markdown` blocks on the
-org-roam side, with the reverse unwrapping in the other direction
-(`logseq-org-sync-reconcile--md-block-to-roam` /
-`--roam-block-to-logseq`, applied by `--translate-plan`).  Other body
-constructs cross formats verbatim (AGENTS.md §11.1).  Org-format Logseq graphs
-need no body translation because both sides already use org syntax.
 
 **Known simplification.**  The reconciler hand-writes org-roam files with the
 Phase 3 writer (`logseq-org-sync-roam-write`) rather than org-roam's capture
@@ -919,8 +858,8 @@ inside the org-roam directory.
 
 ## 10. Implementation phases
 
-1. **Phase 0 — Scope & fixtures.** Add minimal Logseq `.org` and Markdown
-   fixture graphs, each with a matching org-roam fixture for round-trip tests.
+1. **Phase 0 — Scope & fixtures.** Add a minimal Logseq `.org` fixture graph
+   with a matching org-roam fixture for round-trip tests.
 2. **Phase 1 — Extract & stabilize.** Split the monolith into modules (parser,
    dictionaries, inventory, updaters). Port the existing ERT suite. No behavior
    change.
@@ -935,8 +874,8 @@ inside the org-roam directory.
    time) + `after-save-hook` / `file-notify` watchers.
 9. **Phase 8 — Tests & docs.** Round-trip invariants, fixture tests, README.
 
-Phases 0–8 are implemented (§9.8–§9.13 plus `README.org`,
-`LOGSEQ-FORMAT.md`, `ORG-ROAM-FORMAT`); the remaining work is the deferred
+Phases 0–8 are implemented (§9.8–§9.13 plus `README.md`,
+`LOGSEQ-FORMAT.org`, `ORG-ROAM-FORMAT.org`); the remaining work is the deferred
 scope below.
 
 ---
@@ -947,15 +886,12 @@ scope below.
   transclusion for embeds (they render as plain `id:` links there), and
   dangling block references are preserved verbatim.
 - Asset *relocation* (copying/moving files) and full timestamp/tag
-  translation.  File-link paths are now remapped so the org-roam side points
-  at the Logseq graph's real `assets/` directory (no copying), and the reverse
+  translation.  File-link paths are remapped so the org-roam side points at
+  the Logseq graph's real `assets/` directory (no copying), and the reverse
   restores a page-relative link back into the local graph (§3, §9.11).  The
-  asset files themselves stay put on the Logseq side.  Markdown image alt text
-  has no org file-link representation, so it is not preserved across a
-  round-trip.
+  asset files themselves stay put on the Logseq side.
 - Block bodies beyond the first line (tables, code fences, multi-line text)
-  round-trip through `:body` (same-format byte-for-byte, plus cross-format
-  for fenced code blocks and Markdown tables).  See §9.8, §11.1, and §11.2.
+  round-trip through `:body` byte-for-byte.  See §9.8 and §11.1.
 - Live/continuous sync: Phase 7 provides an `after-save-hook` and
   `file-notify` watchers; richer or more robust continuous operation (e.g.
   finer-grained watch filtering, queueing) remains a future concern.
@@ -966,11 +902,10 @@ Logseq itself keeps a block's full body (`:block/body` AST + `:block/content`
 raw text; see `og/deps/graph-parser/src/logseq/graph_parser/block.cljs`
 `extract-blocks` / `get-block-content`), so the headline-only IR was the sync
 engine's own simplification, not Logseq's.  An optional `:body` string has
-been added to the block plist, and the parsers and writers round-trip it.
+been added to the block plist, and the org parsers and writers round-trip it.
 
-Steps 1–7 are implemented: the IR schema, both parser sides, the writers,
-same-format round-trip tests, cross-format body translation, and the doc
-sweep.
+Steps 1–4 are implemented: the IR schema, the org parser sides, the org
+writers, and the same-format round-trip tests.
 
 Steps:
 
@@ -983,173 +918,16 @@ Steps:
    `logseq-org-sync-roam--parse-block`): read the headline's `section` body —
    the section's contents minus its `property-drawer` — canonicalize it, and
    store it as `:body`.
-3. **Markdown parser** (`logseq-org-sync-logseq-markdown--collect-blocks` /
-   `--parse-continuation`): instead of discarding unrecognized indented
-   continuation lines, accumulate them as `:body` (de-indented to the block's
-   content level), preserving blank lines, fenced code, and table rows.
-4. **Writers** emit `:body` after the first line / planning / properties and
-   before children:
-   - org writers (`logseq-org-sync-logseq--format-block`,
-     `logseq-org-sync-roam--format-block`) insert the body text directly;
-   - Markdown writer (`logseq-org-sync-logseq-markdown--format-block`)
-     re-indents each body line with the block's continuation indent.
-5. **Same-format round-trips first.** Verify byte-for-byte round-trips for
-   `org ↔ org` and `markdown ↔ markdown` (extend the existing round-trip
-   tests), since these reuse each side's native body syntax.
-6. **Cross-format.** Fenced code blocks translate natively
-   (` ```lang ` … ` ``` ` ↔ `#+BEGIN_SRC lang` … `#+END_SRC`).  Markdown pipe
-   tables are **not** translated to org tables; instead they are wrapped
-   verbatim in a `#+BEGIN_SRC markdown` … `#+END_SRC` block on the org-roam
-   side (§11.2).  Other `markdown ↔ org` body constructs (blockquotes,
-   `#+BEGIN_*` blocks) remain deferred: such a body crossing formats is
-   carried verbatim and documented as un-translated, or dropped on the
-   foreign side.  This translation lives in
-   `logseq-org-sync-reconcile--md-block-to-roam` /
-   `--roam-block-to-logseq`, applied by `--translate-plan` for Markdown
-   graphs (§9.11).
-7. **Update docs** (`AGENTS.md` §5 IR table, §9.8/§9.9/§9.11,
-   `LOGSEQ-FORMAT.md`, `ORG-ROAM-FORMAT`) — done.
+3. **Org writers** (`logseq-org-sync-logseq--format-block`,
+   `logseq-org-sync-roam--format-block`) emit `:body` after the first line /
+   planning / properties and before children.
+4. **Same-format round-trip.** Verify byte-for-byte round-trips for
+   `org ↔ org` (the round-trip tests exercise this).
 
 Open decisions to resolve during implementation:
 
-- `:body` canonicalization: both sides store raw body text with surrounding
-  whitespace trimmed — the org parsers take the section body minus its
-  planning line and `:PROPERTIES:` drawer, `string-trim`med; the Markdown
-  parser de-indents continuation lines to the block's content level and drops
-  trailing blank lines.  Writer idempotence (step 4) must reproduce this.
+- `:body` canonicalization: the org parsers store the section body minus its
+  planning line and `:PROPERTIES:` drawer, `string-trim`med; writer
+  idempotence (step 3) must reproduce this.
 - whether `:body` stores raw text only, or a future structured AST (mirroring
   Logseq's `:block/body` vs `:block/content` split) is added later.
-
-### 11.2 Markdown tables wrap in a `#+BEGIN_SRC markdown` block
-
-Cross-format block bodies do **not** translate Markdown pipe tables into
-native org tables.  A Markdown pipe table crossing from a Markdown-format
-Logseq graph into its org-roam mirror is carried **verbatim** inside a
-`#+BEGIN_SRC markdown` … `#+END_SRC` block (implemented in
-`logseq-org-sync-reconcile--md-block-to-roam` /
-`--roam-block-to-logseq`, §9.11).  Rationale: GFM and org tables
-disagree on alignment storage (delimiter-row colons vs. org's auto-detected
-`<l>`/`<c>`/`<r>` cookies), escaped pipes (`\|`) have no clean org-table
-equivalent, and cell text would otherwise require per-cell inline translation.
-The wrapper keeps the table byte-for-byte lossless and the round-trip
-self-describing.
-
-**Scope.** Markdown-graph ↔ org-roam only.  Logseq `.org` graphs and org-roam
-both already use native org tables, so no wrapping happens there.
-
-**Round-trip contract.**
-
-- `logseq markdown → roam`: a block whose content is a pipe table (its first
-  line and/or `:body` lines are `| … |` rows) is written with the full table
-  text — header, any delimiter row, and data rows — verbatim inside
-  `#+BEGIN_SRC markdown` … `#+END_SRC`, de-indented to the source block's
-  content level.
-- `roam → logseq markdown`: a `#+BEGIN_SRC markdown` block whose entire
-  contents are a pipe table is unwrapped back to raw pipe-table lines,
-  re-indented under the block with the block's continuation indent.
-
-**Recognition (no extra metadata).** A `#+BEGIN_SRC markdown` block is a
-wrapped table iff its contents are a Markdown pipe table: a header row
-(`| … |`), an optional delimiter row (`|---|`, with optional `:` alignment
-colons), and zero or more data rows — every non-blank line beginning and
-ending with `|`.  A genuine Markdown source block whose sample text is itself
-a valid pipe table is indistinguishable and round-trips back as a native
-table on the Logseq side; this is an accepted, documented edge case.
-
-**IR.** No structured table node is added.  A table travels inside the
-block's `:body` string (§11.1): the Markdown parser/writer handles table rows
-as body lines, and the org-roam parser/writer wraps/unwraps the
-`#+BEGIN_SRC markdown` block.
-
-**Assumptions / open details.**
-
-- First cut assumes a table occupies its block's body (the common Logseq
-  case); mixed paragraph+table content in one block is out of scope until
-  `:body` can represent structured regions.
-- Logseq frequently stores a table's header row as the block's first line
-  (`:text`) with the remaining rows as continuation lines; the Markdown parser
-  must recognize a `| … |` first line as a table row and join it with the
-  `:body` rows before wrapping.
-- The canonical wrapped form preserves the delimiter row and alignment colons
-  exactly; neither side normalizes the table text.
-
-### 11.3 Markdown block tags (`#tag`)
-
-**Status.**  Implemented in the Markdown parser and writer
-(`logseq-org-sync-logseq-markdown--make-block` / `--format-block`).  The org
-sides (Logseq `.org` and org-roam) already read and write block `:tags` as
-headline tags, so no org-side change was needed.
-
-**Behavior.**
-
-- Markdown parser: `#tag` and `#[[multi-word tag]]` in a block's first line
-  are *stripped* from `:text` and collected into the block's `:tags`.  A plain
-  `#tag` drops trailing sentence punctuation; a `#[[...]]` tag is normalized
-  to underscore spelling (`#[[next week]]` → `next_week`) because org headline
-  tags cannot contain whitespace.
-- Markdown writer: the block's `:tags` are emitted at the end of the first
-  line as `#tag` (in document order).
-- org-roam / Logseq `.org`: unchanged — `:tags` already round-trips as `:tag:`.
-
-**Decisions made.**
-
-- *Strip* (not preserve): the tag leaves `:text` and lives only in `:tags`, so
-  the round-trip is lossless with no duplication.
-- *Position*: tags move to the end of the line (org's only headline-tag
-  position); the first sync canonicalizes this and later runs are no-ops.
-- *Multi-word spelling*: spaces normalize to `_`; the reverse maps an
-  underscore tag back to a single `#tag` word (spaces are not recovered).
-- *Case*: preserved verbatim on both sides (no lowercase normalization).
-- *Deduplication*: `:tags` is the single source of truth; nothing is re-added
-  to `:text`.
-
-**Known limitations.**
-
-- org headline tags are more restrictive than Logseq tag text
-  (`[[:alnum:]_@#%]` only), so tags containing other characters (e.g. `+`,
-  `:`, apostrophes) may produce an invalid org tag.
-- A `#` inside a `[[...]]` page link is not protected from tag extraction.
-- Trailing sentence punctuation on a plain `#tag` (`#tag.`) is dropped rather
-  than kept as part of the tag.
-
-### 11.4 Markdown emphasis translation
-
-**Status.**  Implemented in the reconciler
-(`logseq-org-sync-reconcile--translate-md-emphasis` /
-`--translate-org-emphasis`), applied on each block's `:text` for Markdown
-graphs only.  It is enabled by default; set
-`logseq-org-sync-translate-emphasis` to nil to carry emphasis verbatim.
-
-**Behavior.**
-
-- Markdown → org: `**bold**` → `*bold*`, `*italic*` → `/italic/`,
-  `~~strike~~` → `+strike+`, `` `code` `` → `~code~`.  The Markdown side is
-  parsed with the `markdown-inline` tree-sitter grammar (the `strong_emphasis`,
-  `emphasis`, `strikethrough` and `code_span` nodes); when that grammar is not
-  installed the Markdown emphasis is left verbatim.
-- org → Markdown: the reverse spellings.  The org side is parsed with
-  `org-element-parse-secondary-string` for `bold`, `italic`, `strike-through`
-  and `code` objects, which keeps `/`-bearing file paths and URLs inside links
-  intact.
-- `_italic_` / `__bold__` underscore emphasis is **not** translated.
-
-**Decisions made.**
-
-- *Basic only*: translation assumes emphasis is not nested or combined.  Each
-  span is either bold, italic, strike, or code — never more than one at once.
-- *First-line only*: emphasis is translated on a block's `:text` (its first
-  line), matching link translation; emphasis inside a block's `:body` is not
-  translated.
-- *Treesitter primary*: the Markdown side relies on `markdown-inline` rather
-  than a regexp, so Logseq block references (`((uuid))`) and links are left
-  untouched by construction (only emphasis node spans are rewritten).
-
-**Known limitations.**
-
-- Nested or combined emphasis (`**bold *italic***`, `***both***`) is not
-  supported and may produce incorrect markup; it is assumed absent.
-- Underscore emphasis (`_italic_`, `__bold__`) is left verbatim.
-- Emphasis inside an org link description (e.g. `[[id:…][Page *bold*]]`) is
-  not translated in the org → Markdown direction.
-- Emphasis in a block's `:body` (continuation lines) is not translated.
-

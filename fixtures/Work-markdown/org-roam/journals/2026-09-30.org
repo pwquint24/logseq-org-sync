@@ -1,7 +1,0 @@
-:PROPERTIES:
-:ID: 10000000-0000-0000-0000-000000000003
-:END:
-#+title: 2026-09-30
-
-* Review [[id:10000000-0000-0000-0000-000000000001][Project Alpha]] proposal
-** TODO Send feedback

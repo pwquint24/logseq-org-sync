@@ -9,3 +9,15 @@ og/
 /md-treesit/
 before-after/
 /.projectile
+
+# Logseq temporary files
+.logseq/
+logseq/bak/
+logseq/pages-metadata.edn
+logseq/graphs-metadata.edn
+
+# Pandoc test artifacts
+*.tmp
+tests-pandoc/inputs/*.md.tmp
+tests-pandoc/inputs/*.org.tmp
+/test-cases.md

@@ -302,12 +302,14 @@ files."
 
 ;;;###autoload
 (defun logseq-org-sync-add-graph (&optional logseq-root name)
-  "Add a Logseq graph to `logseq-org-sync-graphs'.
+  "Add a Logseq org graph to `logseq-org-sync-graphs'.
 Interactively, LOGSEQ-ROOT is read with `read-directory-name'.  NAME
 defaults to LOGSEQ-ROOT's basename and the org-roam mirror to
 `<logseq-org-sync-roam-directory>/<name>'; both are created/derived
-automatically.  The value is saved via Customize."
-  (interactive (list (read-directory-name "Logseq graph folder: " nil nil t)))
+automatically.  Markdown graphs are not synced; use
+`logseq-org-sync-pd-import-directory' / `logseq-org-sync-pd-export-directory'
+for those.  The value is saved via Customize."
+  (interactive (list (read-directory-name "Logseq org graph folder: " nil nil t)))
   (let* ((root (expand-file-name logseq-root))
          (default-name (file-name-nondirectory (directory-file-name root)))
          (name (or name
@@ -319,9 +321,10 @@ automatically.  The value is saved via Customize."
          (graph (logseq-org-sync--graph-entry root name))
          (roam-root (logseq-org-sync--roam-root-for graph))
          (format (logseq-org-sync-logseq-graph-format root)))
+    (when (eq format 'markdown)
+      (user-error "Graph %S is Markdown; sync only supports org graphs. Use import/export instead." name))
     (when (y-or-n-p
-           (format "Add graph %S (%s) with org-roam mirror %S? "
-                   name (or format 'unknown) roam-root))
+           (format "Add graph %S with org-roam mirror %S? " name roam-root))
       (make-directory roam-root t)
       (customize-save-variable
        'logseq-org-sync-graphs

@@ -1,4 +1,4 @@
-;;; logseq-org-sync-pd.el --- Logseq <-> Org-roam sync via pandoc -*- lexical-binding: t; -*-
+;;; logseq-org-sync-pd.el --- Logseq Markdown <-> Org-roam import/export via pandoc -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2024  Andrew Patrick
 
@@ -10,16 +10,17 @@
 
 ;;; Commentary:
 
-;; This library implements the pandoc-based conversion backend for the
-;; `logseq-org-sync' package.
+;; This library implements the pandoc-based import/export backend for the
+;; `logseq-org-sync' package.  It converts Logseq Markdown graphs to and
+;; from Org-roam Org documents; it is not the two-way sync engine.
 ;;
-;; Forward (Logseq -> Org-roam): pandoc converts Logseq markdown to Org
-;; with the `logseq-to-org.lua' filter; a post-processing step then
+;; Import (Logseq Markdown -> Org-roam): pandoc converts Logseq markdown
+;; to Org with the `logseq-to-org.lua' filter; a post-processing step then
 ;; resolves fuzzy page links (`[[Page Title]]') into org-roam id links
 ;; (`[[id:UUID]]') using the org-roam database.
 ;;
-;; Reverse (Org-roam -> Logseq): pandoc converts Org back to markdown
-;; with the `org-to-logseq.lua' filter.
+;; Export (Org-roam -> Logseq Markdown): pandoc converts Org back to
+;; markdown with the `org-to-logseq.lua' filter.
 
 ;;; Code:
 
@@ -38,7 +39,7 @@
 (declare-function org-roam-db-sync "org-roam-db" (&optional force))
 
 (defgroup logseq-org-sync-pd nil
-  "Synchronize Logseq graphs with Org-roam using pandoc."
+  "Import/export Logseq Markdown graphs to/from Org-roam using pandoc."
   :group 'org)
 
 (defun logseq-org-sync-pd--dir ()
@@ -118,6 +119,18 @@ component is present, fall back to the file's basename."
     (if idx
         (mapconcat #'identity (nthcdr idx parts) "/")
       (file-name-nondirectory abs))))
+
+(defun logseq-org-sync-pd--graph-files (dir regexp)
+  "Return files under DIR's `pages/' and `journals/' matching REGEXP.
+The result is a sorted list of absolute file names.  This mirrors the
+Logseq/org-roam directory layout (AGENTS.md §2)."
+  (let ((files nil))
+    (dolist (sub '("pages" "journals"))
+      (let ((subdir (expand-file-name sub (expand-file-name dir))))
+        (when (file-directory-p subdir)
+          (dolist (file (directory-files-recursively subdir regexp))
+            (push file files)))))
+    (sort (nreverse files) #'string<)))
 
 ;;; Org-roam resolution
 
@@ -321,6 +334,24 @@ Return the list of created .org file paths."
       (logseq-org-sync-pd-resolve-page-links-in-file out))
     (nreverse out-files)))
 
+;;;###autoload
+(defun logseq-org-sync-pd-import-directory (source-dir target-dir)
+  "Import the Logseq markdown graph at SOURCE-DIR into TARGET-DIR.
+
+SOURCE-DIR is a Logseq graph directory containing `pages/' and
+`journals/'.  Each `.md' note is converted to an Org-roam `.org' file
+under TARGET-DIR, preserving the `pages/'/`journals/' layout.  The
+org-roam database is synchronized and fuzzy page links are resolved to
+`id:' links.
+
+Return the list of created .org file paths."
+  (interactive
+   (list (read-directory-name "Logseq markdown graph: ")
+         (read-directory-name "Org-roam target directory: ")))
+  (logseq-org-sync-pd-import-files
+   (logseq-org-sync-pd--graph-files source-dir "\\.\\(md\\|markdown\\)\\'")
+   target-dir))
+
 (defun logseq-org-sync-pd--restore-copy (file)
   "Return a temp .org copy of FILE with page links restored to fuzzy.
 The caller is responsible for deleting the returned temp file."
@@ -329,13 +360,30 @@ The caller is responsible for deleting the returned temp file."
     (logseq-org-sync-pd-restore-page-links-in-file temp)
     temp))
 
+(defun logseq-org-sync-pd--export-file (file base target-dir)
+  "Convert FILE (an Org-roam note) to Logseq markdown in TARGET-DIR.
+BASE is the directory FILE's output layout is relative to.  Returns the
+created .md file path."
+  (let* ((rel (file-relative-name (expand-file-name file)
+                                  (expand-file-name base)))
+         (rel-md (concat (file-name-sans-extension rel) ".md"))
+         (out (expand-file-name rel-md (expand-file-name target-dir)))
+         (temp (logseq-org-sync-pd--restore-copy file)))
+    (make-directory (file-name-directory out) t)
+    (unwind-protect
+        (logseq-org-sync-pd--run-pandoc temp out t)
+      (ignore-errors (delete-file temp)))
+    out))
+
 ;;;###autoload
 (defun logseq-org-sync-pd-export-files (files target-dir)
   "Export Org-roam FILES to Logseq markdown in TARGET-DIR.
 
 Each file's layout relative to `org-roam-directory' is preserved under
-TARGET-DIR.  File-level id links are restored to page links before
-conversion; heading id links are kept as block references.
+TARGET-DIR (falling back to the file's basename when
+`org-roam-directory' is unset).  File-level id links are restored to
+page links before conversion; heading id links are kept as block
+references.
 
 The org-roam database must be current (see `org-roam-db-sync').
 
@@ -345,17 +393,32 @@ Return the list of created .md file paths."
                    (expand-file-name org-roam-directory))))
     (logseq-org-sync-pd--require-org-roam)
     (dolist (file files)
-      (let* ((rel (if root
-                      (file-relative-name (expand-file-name file) root)
-                    (file-name-nondirectory file)))
-             (rel-md (concat (file-name-sans-extension rel) ".md"))
-             (out (expand-file-name rel-md (expand-file-name target-dir)))
-             (temp (logseq-org-sync-pd--restore-copy file)))
-        (make-directory (file-name-directory out) t)
-        (unwind-protect
-            (logseq-org-sync-pd--run-pandoc temp out t)
-          (ignore-errors (delete-file temp)))
-        (push out out-files)))
+      (let ((base (or root (file-name-directory (expand-file-name file)))))
+        (push (logseq-org-sync-pd--export-file file base target-dir)
+              out-files)))
+    (nreverse out-files)))
+
+;;;###autoload
+(defun logseq-org-sync-pd-export-directory (source-dir target-dir)
+  "Export the Org-roam subdirectory SOURCE-DIR to TARGET-DIR.
+
+SOURCE-DIR is an org-roam mirror directory containing `pages/' and
+`journals/'.  Each `.org' note is converted back to a Logseq `.md' file
+under TARGET-DIR, preserving the `pages/'/`journals/' layout.
+
+File-level `id:' links are restored to page links before conversion;
+heading `id:' links are kept as block references.
+
+The org-roam database must be current (see `org-roam-db-sync').
+
+Return the list of created .md file paths."
+  (interactive
+   (list (read-directory-name "Org-roam source directory: ")
+         (read-directory-name "Logseq markdown target directory: ")))
+  (let ((out-files nil))
+    (dolist (file (logseq-org-sync-pd--graph-files source-dir "\\.org\\'"))
+      (push (logseq-org-sync-pd--export-file file source-dir target-dir)
+            out-files))
     (nreverse out-files)))
 
 (provide 'logseq-org-sync-pd)

@@ -93,7 +93,6 @@
 
 (require 'cl-lib)
 (require 'subr-x)
-(require 'treesit)
 (require 'org-element)
 (require 'logseq-org-sync-logseq)
 (require 'logseq-org-sync-roam)
@@ -104,35 +103,17 @@
   "Subdirectory, under a graph root, that receives trashed files.
 Deletions are moved here rather than hard-deleted (AGENTS.md §1.7).")
 
-(defun logseq-org-sync-reconcile--graph-format (graph)
-  "Return `org' or `markdown' for GRAPH's Logseq side."
-  (logseq-org-sync-logseq-graph-format (plist-get graph :logseq-root)))
-
-(defun logseq-org-sync-reconcile--markdown-p (graph)
-  "Return non-nil when GRAPH's Logseq side uses Markdown files."
-  (eq (logseq-org-sync-reconcile--graph-format graph) 'markdown))
-
-(defun logseq-org-sync-reconcile--replace-extension (path from to)
-  "Replace PATH's FROM extension with TO, or return PATH unchanged."
-  (if (string-suffix-p from path)
-      (concat (substring path 0 (- (length path) (length from))) to)
-    path))
-
-(defun logseq-org-sync-reconcile--roam-path (graph logseq-path)
+(defun logseq-org-sync-reconcile--roam-path (_graph logseq-path)
   "Return the org-roam relative path corresponding to LOGSEQ-PATH.
-GRAPH supplies the Logseq graph's format (see
-`logseq-org-sync-reconcile--graph-format')."
-  (if (logseq-org-sync-reconcile--markdown-p graph)
-      (logseq-org-sync-reconcile--replace-extension logseq-path ".md" ".org")
-    logseq-path))
+Logseq org graphs and their org-roam mirrors share the same `.org'
+extension, so the path is unchanged."
+  logseq-path)
 
-(defun logseq-org-sync-reconcile--logseq-path (graph roam-path)
+(defun logseq-org-sync-reconcile--logseq-path (_graph roam-path)
   "Return the Logseq relative path corresponding to ROAM-PATH.
-GRAPH supplies the Logseq graph's format (see
-`logseq-org-sync-reconcile--graph-format')."
-  (if (logseq-org-sync-reconcile--markdown-p graph)
-      (logseq-org-sync-reconcile--replace-extension roam-path ".org" ".md")
-    roam-path))
+Logseq org graphs and their org-roam mirrors share the same `.org'
+extension, so the path is unchanged."
+  roam-path)
 
 (defgroup logseq-org-sync nil
   "Two-way sync between a Logseq graph and an org-roam directory."
@@ -171,16 +152,6 @@ lines, body, or children.  Empty Logseq bullets (`-` with no text) are
 otherwise mirrored as empty org headlines (`* `), which is lossless but
 noisy.  Dropping them keeps the org-roam mirror clean at the cost of not
 preserving empty placeholder bullets."
-  :type 'boolean
-  :group 'logseq-org-sync)
-
-(defcustom logseq-org-sync-translate-emphasis t
-  "When non-nil, translate inline emphasis between the two sides.
-For Markdown-format Logseq graphs, Markdown `**bold**', `*italic*',
-`~~strike~~' and `` `code` `` are translated to org `*bold*',
-`/italic/', `+strike+' and `~code~' (and back).  Set to nil to carry
-emphasis markup through verbatim.  Nested or combined emphasis (for
-example `**bold *italic***') is not translated."
   :type 'boolean
   :group 'logseq-org-sync)
 
@@ -245,8 +216,7 @@ that fallback (e.g. mapping `.md' Logseq paths to their `.org' mirror)."
   (logseq-org-sync-reconcile--build-table
    (plist-get graph :logseq-root)
    (lambda (root pages journals)
-     (logseq-org-sync-logseq-scan
-      root pages journals (logseq-org-sync-reconcile--graph-format graph)))
+     (logseq-org-sync-logseq-scan root pages journals))
    #'logseq-org-sync-logseq-parse-file
    (plist-get graph :pages-directory)
    (plist-get graph :journals-directory)
@@ -451,8 +421,8 @@ copy was deleted, so mirror the deletion into that side's trash
 
 (defun logseq-org-sync-reconcile--block-id (block)
   "Return BLOCK's identity UUID, or nil.
-Block ids live in BLOCK's `:properties' under \"ID\" (org) or
-\"id\" (Markdown)."
+Block ids live in BLOCK's `:properties' under \"ID\" (or lowercase
+\"id\")."
   (let ((props (plist-get block :properties)))
     (or (cdr (assoc "ID" props))
         (cdr (assoc "id" props)))))
@@ -625,72 +595,41 @@ TITLE->UUIDS maps a normalized page title/alias to its UUID list."
     (and (= (length ids) 1) (car ids))))
 
 (defconst logseq-org-sync-reconcile--logseq-page-link-regexp
-  (concat "\\[\\([^][]*\\)\\](\\(\\[\\[[^][]*\\]\\]\\))"
-          "\\|"
-          "\\[\\[\\([^][]*\\)\\]\\]")
-  "Regexp matching Logseq page links.
-Group 1/2 match a Markdown described page link `[Label]([[Target]])';
-group 3 matches a plain `[[Target]]' link (org and Markdown).")
+  "\\[\\[\\([^][]*\\)\\]\\]"
+  "Regexp matching a Logseq org page link `[[Target]]'.")
 
 (defun logseq-org-sync-reconcile--translate-logseq-page-links (text title->uuids)
   "Return TEXT with Logseq page links translated to org-roam id links.
-`[[Title]]' becomes `[[id:UUID][Title]]' and `[Label]([[Title]])'
-becomes `[[id:UUID][Label]]'.  TITLE->UUIDS maps a normalized page
-title/alias to its UUID list.  Links whose target is missing or
-ambiguous are left untouched (AGENTS.md §3)."
+`[[Title]]' becomes `[[id:UUID][Title]]'.  TITLE->UUIDS maps a
+normalized page title/alias to its UUID list.  Links whose target is
+missing or ambiguous are left untouched (AGENTS.md §3)."
   (replace-regexp-in-string
    logseq-org-sync-reconcile--logseq-page-link-regexp
    (lambda (whole)
      (save-match-data
-       (let ((label (match-string 1 whole))
-             (bracketed (match-string 2 whole))
-             (plain (match-string 3 whole)))
-         (cond
-          (bracketed
-           (let* ((target (substring bracketed 2 -2))
-                  (uuid (logseq-org-sync-reconcile--resolve-page
-                         target title->uuids)))
-             (if uuid (format "[[id:%s][%s]]" uuid label) whole)))
-          (plain
-           (let ((uuid (logseq-org-sync-reconcile--resolve-page
-                        plain title->uuids)))
-             (if uuid (format "[[id:%s][%s]]" uuid plain) whole)))
-          (t whole)))))
+       (let* ((target (match-string 1 whole))
+              (uuid (logseq-org-sync-reconcile--resolve-page
+                     target title->uuids)))
+         (if uuid (format "[[id:%s][%s]]" uuid target) whole))))
    text t t))
 
-(defun logseq-org-sync-reconcile--translate-roam-page-links
-    (text uuid->title markdown-p)
+(defun logseq-org-sync-reconcile--translate-roam-page-links (text uuid->title)
   "Return TEXT with org-roam page id links translated to Logseq page links.
-`[[id:UUID][DESC]]' and `[[id:UUID]]' become `[[Title]]', or a Markdown
-described link `[DESC]([[Title]])' when the description differs from the
-page title.  UUID->TITLE maps page UUIDs to titles and MARKDOWN-P selects
-the output form.  Id links with no known title are left untouched."
+`[[id:UUID][DESC]]' and `[[id:UUID]]' become `[[Title]]'.  UUID->TITLE
+maps page UUIDs to titles.  Id links with no known title are left
+untouched."
   (replace-regexp-in-string
    logseq-org-sync-reconcile--id-link-regexp
    (lambda (whole)
      (save-match-data
        (if (string-match logseq-org-sync-reconcile--id-link-regexp whole)
            (let* ((uuid (or (match-string 1 whole) (match-string 3 whole)))
-                  (desc (match-string 2 whole))
                   (title (gethash uuid uuid->title)))
              (if (null title)
                  whole
-               (if (and markdown-p desc (not (string-empty-p desc))
-                        (not (string= desc title)))
-                   (format "[%s]([[%s]])" desc title)
-                 (format "[[%s]]" title))))
+               (format "[[%s]]" title)))
          whole)))
    text t t))
-
-(defconst logseq-org-sync-reconcile--url-regexp
-  "\\`\\(?:https?\\|ftp\\|mailto\\):"
-  "Regexp matching the start of an external URL scheme.")
-
-(defconst logseq-org-sync-reconcile--markdown-link-regexp
-  "\\(!?\\)\\[\\([^][]*\\)\\](\\([^()[:space:]]+\\))"
-  "Regexp matching a Markdown described link or image.
-Group 1 is `!' for an image, group 2 the label/alt text, and group 3
-the destination.")
 
 (defconst logseq-org-sync-reconcile--org-file-link-regexp
   (concat "\\[\\[file:\\([^][]*\\)\\]\\[\\([^][]*\\)\\]\\]"
@@ -719,34 +658,6 @@ resolved against LOGSEQ-PATH's directory under LOGSEQ-ROOT."
     (and (file-name-absolute-p path)
          (string-prefix-p root (expand-file-name path)))))
 
-(defun logseq-org-sync-reconcile--translate-markdown-links
-    (text logseq-root logseq-path)
-  "Return TEXT with Markdown `[label](dest)' / `![alt](dest)' translated.
-External URL destinations become org URL links; file destinations become
-org `[[file:...]]' links pointing at the file's absolute location under
-LOGSEQ-ROOT.  LOGSEQ-PATH is the page's path within LOGSEQ-ROOT
-\(AGENTS.md §3: assets are referenced, not moved)."
-  (replace-regexp-in-string
-   logseq-org-sync-reconcile--markdown-link-regexp
-   (lambda (whole)
-     (save-match-data
-       (let ((image-p (equal (match-string 1 whole) "!"))
-             (label (match-string 2 whole))
-             (dest (match-string 3 whole)))
-         (cond
-          ((string-prefix-p "[[" dest) whole)
-          ((string-match-p logseq-org-sync-reconcile--url-regexp dest)
-           (if image-p
-               (format "[[%s]]" dest)
-             (format "[[%s][%s]]" dest label)))
-          (t
-           (let ((abs (logseq-org-sync-reconcile--resolve-logseq-file
-                       dest logseq-root logseq-path)))
-             (if image-p
-                 (format "[[file:%s]]" abs)
-               (format "[[file:%s][%s]]" abs label))))))))
-   text t t))
-
 (defun logseq-org-sync-reconcile--translate-logseq-org-file-links
     (text logseq-root logseq-path)
   "Return TEXT with Logseq org `[[file:...]]' links remapped to LOGSEQ-ROOT.
@@ -766,36 +677,12 @@ location (assets are referenced, never moved)."
              (format "[[file:%s]]" abs))))))
    text t t))
 
-(defun logseq-org-sync-reconcile--translate-roam-url-links (text)
-  "Return TEXT with org URL links translated to Markdown links.
-`[[URL][LABEL]]' becomes `[LABEL](URL)' and `[[URL]]' becomes `<URL>'."
-  (replace-regexp-in-string
-   (concat "\\[\\[\\([^][]+\\)\\]\\[\\([^][]*\\)\\]\\]"
-           "\\|"
-           "\\[\\[\\([^][]+\\)\\]\\]")
-   (lambda (whole)
-     (save-match-data
-       (let ((url (match-string 1 whole))
-             (label (match-string 2 whole))
-             (bare (match-string 3 whole)))
-         (cond
-          (url
-           (if (string-match-p logseq-org-sync-reconcile--url-regexp url)
-               (format "[%s](%s)" label url)
-             whole))
-          (bare
-           (if (string-match-p logseq-org-sync-reconcile--url-regexp bare)
-               (format "<%s>" bare)
-             whole))
-          (t whole)))))
-   text t t))
-
 (defun logseq-org-sync-reconcile--translate-roam-file-links
-    (text markdown-p logseq-root logseq-path)
+    (text logseq-root logseq-path)
   "Return TEXT with org `[[file:...]]' links translated for the Logseq side.
 A path under LOGSEQ-ROOT becomes relative to LOGSEQ-PATH's page directory,
-back into the local graph's assets directory.  MARKDOWN-P selects Markdown
-output (`[label](path)' / `![alt](path)'); org output keeps `[[file:path]]'."
+back into the local graph's assets directory.  Other file links are left
+untouched."
   (replace-regexp-in-string
    logseq-org-sync-reconcile--org-file-link-regexp
    (lambda (whole)
@@ -809,371 +696,59 @@ output (`[label](path)' / `![alt](path)'); org output keeps `[[file:path]]'."
                            logseq-root logseq-path)))))
            (cond
             (rel
-             (if markdown-p
-                 (if desc
-                     (format "[%s](%s)" desc rel)
-                   (format "![%s](%s)" (file-name-nondirectory path) rel))
-               (if desc
-                   (format "[[file:%s][%s]]" rel desc)
-                 (format "[[file:%s]]" rel))))
-            (markdown-p
              (if desc
-                 (format "[%s](%s)" desc path)
-               (format "![%s](%s)" (file-name-nondirectory path) path)))
+                 (format "[[file:%s][%s]]" rel desc)
+               (format "[[file:%s]]" rel)))
             (t whole))))))
    text t t))
 
 (defun logseq-org-sync-reconcile--translate-logseq-links
-    (text title->uuids markdown-p logseq-root logseq-path)
+    (text title->uuids logseq-root logseq-path)
   "Return TEXT with Logseq links translated for the org-roam side.
 TITLE->UUIDS maps page titles/aliases to UUIDs.  Page links become id
-links; Markdown URL/file links become org links; org file links are
-remapped to absolute paths under LOGSEQ-ROOT.  MARKDOWN-P selects the
-source syntax and LOGSEQ-PATH locates the page for file remapping."
-  (let ((text (logseq-org-sync-reconcile--translate-logseq-page-links
-               text title->uuids)))
-    (if markdown-p
-        (logseq-org-sync-reconcile--translate-markdown-links
-         text logseq-root logseq-path)
-      (logseq-org-sync-reconcile--translate-logseq-org-file-links
-       text logseq-root logseq-path))))
+links; org file links are remapped to absolute paths under LOGSEQ-ROOT.
+LOGSEQ-PATH locates the page for file remapping."
+  (logseq-org-sync-reconcile--translate-logseq-org-file-links
+   (logseq-org-sync-reconcile--translate-logseq-page-links
+    text title->uuids)
+   logseq-root logseq-path))
 
 (defun logseq-org-sync-reconcile--translate-roam-links
-    (text uuid->title markdown-p logseq-root logseq-path)
+    (text uuid->title logseq-root logseq-path)
   "Return TEXT with org-roam links translated for the Logseq side.
 UUID->TITLE maps page UUIDs to titles.  Page id links become page links;
-org URL/file links become Markdown links (or are remapped for org
-output).  MARKDOWN-P selects the target syntax; LOGSEQ-ROOT and
+file links are remapped relative to LOGSEQ-PATH.  LOGSEQ-ROOT and
 LOGSEQ-PATH locate the page for file remapping."
-  (let ((text (logseq-org-sync-reconcile--translate-roam-page-links
-               text uuid->title markdown-p)))
-    (when markdown-p
-      (setq text (logseq-org-sync-reconcile--translate-roam-url-links text)))
-    (logseq-org-sync-reconcile--translate-roam-file-links
-     text markdown-p logseq-root logseq-path)))
-
-;;; ---------------------------------------------------------------------------
-;;; Emphasis translation (Markdown <-> org)
-;;; ---------------------------------------------------------------------------
-
-(defconst logseq-org-sync-reconcile--md-emphasis-types
-  '("strong_emphasis" "emphasis" "strikethrough" "code_span")
-  "`markdown-inline' node types translated as inline emphasis.
-In document order these are bold, italic, strikethrough and inline
-code.  Nested or combined emphasis is not supported.")
-
-(defun logseq-org-sync-reconcile--md-emphasis-delim-len (type)
-  "Return the Markdown delimiter length for emphasis node TYPE."
-  (if (member type '("emphasis" "code_span")) 1 2))
-
-(defun logseq-org-sync-reconcile--md-emphasis-to-org (node)
-  "Return the org emphasis string for a `markdown-inline' NODE.
-NODE is one of `logseq-org-sync-reconcile--md-emphasis-types' and is
-assumed to carry no nested emphasis."
-  (let* ((type (treesit-node-type node))
-         (text (treesit-node-text node t))
-         (len (logseq-org-sync-reconcile--md-emphasis-delim-len type))
-         (inner (substring text len (- (length text) len))))
-    (pcase type
-      ("strong_emphasis" (format "*%s*" inner))
-      ("emphasis" (format "/%s/" inner))
-      ("strikethrough" (format "+%s+" inner))
-      ("code_span" (format "~%s~" inner)))))
-
-(defun logseq-org-sync-reconcile--md-emphasis-underscore-p (node)
-  "Return non-nil when emphasis NODE uses underscore delimiters.
-Underscore emphasis (`_italic_', `__bold__') is left verbatim; only the
-`*' forms are translated."
-  (string-prefix-p "_" (treesit-node-text node t)))
-
-(defun logseq-org-sync-reconcile--collect-md-emphasis (node)
-  "Return the outermost Markdown emphasis nodes under NODE.
-Nodes are returned in document order.  Only outermost, non-underscore
-emphasis nodes are collected, so nested emphasis (out of scope) is never
-double-translated."
-  (let ((result nil))
-    (dolist (child (treesit-node-children node t))
-      (if (and (member (treesit-node-type child)
-                       logseq-org-sync-reconcile--md-emphasis-types)
-               (not (logseq-org-sync-reconcile--md-emphasis-underscore-p child)))
-          (push child result)
-        (setq result (append result
-                             (logseq-org-sync-reconcile--collect-md-emphasis
-                              child)))))
-    (sort result (lambda (a b)
-                   (< (treesit-node-start a) (treesit-node-start b))))))
-
-(defun logseq-org-sync-reconcile--translate-md-emphasis (text)
-  "Return TEXT with Markdown emphasis translated to org emphasis.
-Uses the `markdown-inline' tree-sitter grammar to find bold, italic,
-strikethrough and inline code spans and rewrite them in org syntax.
-Handles `**bold**', `*italic*', `~~strike~~' and `` `code` ``;
-underscore emphasis and nested/combined emphasis are left verbatim.
-Returns TEXT unchanged when the grammar is unavailable or TEXT is empty."
-  (if (or (null text) (string-empty-p text))
-      text
-    (require 'markdown-ts-mode nil t)
-    (if (not (treesit-language-available-p 'markdown-inline))
-        text
-      (with-temp-buffer
-        (insert text)
-        (let* ((parser (treesit-parser-create 'markdown-inline))
-               (root (treesit-parser-root-node parser))
-               (nodes (logseq-org-sync-reconcile--collect-md-emphasis root))
-               ;; Precompute edits (start end replacement) before mutating the
-               ;; buffer, then apply them from last to first so earlier
-               ;; positions stay valid.
-               (edits (mapcar
-                       (lambda (node)
-                         (list (treesit-node-start node)
-                               (treesit-node-end node)
-                               (logseq-org-sync-reconcile--md-emphasis-to-org
-                                node)))
-                       nodes)))
-          (dolist (edit (nreverse edits))
-            (let ((start (car edit)) (end (cadr edit)) (repl (caddr edit)))
-              (goto-char start)
-              (delete-region start end)
-              (insert repl)))
-          (buffer-substring-no-properties (point-min) (point-max)))))))
-
-(defun logseq-org-sync-reconcile--org-emphasis-span (obj)
-  "Return (START . END) of OBJ's emphasis markup as 0-based string indices.
-Org-element's `:end' includes `:post-blank' trailing whitespace, which is
-not part of the emphasis markup and is excluded here."
-  (let ((begin (org-element-property :begin obj))
-        (end (org-element-property :end obj))
-        (post-blank (or (org-element-property :post-blank obj) 0)))
-    (cons (1- begin) (1- (- end post-blank)))))
-
-(defun logseq-org-sync-reconcile--org-emphasis-to-markdown (obj text)
-  "Return the Markdown emphasis string for org-element emphasis OBJ.
-TEXT is the original string OBJ was parsed from (used to recover the
-emphasized content)."
-  (let* ((type (org-element-type obj))
-         (span (logseq-org-sync-reconcile--org-emphasis-span obj))
-         (node-text (substring text (car span) (cdr span)))
-         (inner (substring node-text 1 -1)))
-    (pcase type
-      ('bold (format "**%s**" inner))
-      ('italic (format "*%s*" inner))
-      ('strike-through (format "~~%s~~" inner))
-      ('code (format "`%s`" inner)))))
-
-(defun logseq-org-sync-reconcile--translate-org-emphasis (text)
-  "Return TEXT with org emphasis translated to Markdown emphasis.
-`*bold*' becomes `**bold**', `/italic/' becomes `*italic*',
-`+strike+' becomes `~~strike~~' and `~code~' becomes `` `code` ``.
-Org links are parsed so a `/'-bearing file path or URL is left alone.
-Nested or combined emphasis (including emphasis inside a link
-description) is not translated."
-  (if (or (null text) (string-empty-p text))
-      text
-    (let* ((objs (org-element-parse-secondary-string
-                  text '(bold italic strike-through code link)))
-           (emph (cl-remove-if-not
-                  (lambda (obj)
-                    (memq (org-element-type obj)
-                          '(bold italic strike-through code)))
-                  objs)))
-      (if (null emph)
-          text
-        (let ((result nil) (pos 0))
-          (dolist (obj emph)
-            (let* ((span (logseq-org-sync-reconcile--org-emphasis-span obj))
-                   (start (car span))
-                   (markup-end (cdr span)))
-              (when (> start pos)
-                (push (substring text pos start) result))
-              (push (logseq-org-sync-reconcile--org-emphasis-to-markdown
-                     obj text)
-                    result)
-              (setq pos markup-end)))
-          (when (< pos (length text))
-            (push (substring text pos) result))
-          (apply #'concat (nreverse result)))))))
+  (logseq-org-sync-reconcile--translate-roam-file-links
+   (logseq-org-sync-reconcile--translate-roam-page-links
+    text uuid->title)
+   logseq-root logseq-path))
 
 (defun logseq-org-sync-reconcile--node-to-roam
-    (node block-registry title->uuids markdown-p logseq-root logseq-path)
-  "Return NODE with Logseq links and emphasis translated to org-roam.
+    (node block-registry title->uuids logseq-root logseq-path)
+  "Return NODE with Logseq links translated to org-roam.
 BLOCK-REGISTRY maps block UUIDs to text; TITLE->UUIDS maps page
-titles/aliases to UUIDs.  MARKDOWN-P selects the Logseq syntax; when
-non-nil and `logseq-org-sync-translate-emphasis' is enabled, Markdown
-emphasis is translated to org emphasis.  LOGSEQ-ROOT and LOGSEQ-PATH
-locate the page for file-link remapping."
+titles/aliases to UUIDs.  LOGSEQ-ROOT and LOGSEQ-PATH locate the page
+for file-link remapping."
   (logseq-org-sync-reconcile--translate-node
    node
    (lambda (text)
-     (let ((text (if (and markdown-p logseq-org-sync-translate-emphasis)
-                     (logseq-org-sync-reconcile--translate-md-emphasis text)
-                   text)))
-       (logseq-org-sync-reconcile--translate-logseq-links
-        (logseq-org-sync-reconcile--translate-logseq-text text block-registry)
-        title->uuids markdown-p logseq-root logseq-path)))))
+     (logseq-org-sync-reconcile--translate-logseq-links
+      (logseq-org-sync-reconcile--translate-logseq-text text block-registry)
+      title->uuids logseq-root logseq-path))))
 
 (defun logseq-org-sync-reconcile--node-to-logseq
-    (node block-registry uuid->title markdown-p logseq-root logseq-path)
-  "Return NODE with org-roam links and emphasis translated to Logseq.
+    (node block-registry uuid->title logseq-root logseq-path)
+  "Return NODE with org-roam links translated to Logseq.
 BLOCK-REGISTRY maps block UUIDs to text; UUID->TITLE maps page UUIDs to
-titles.  MARKDOWN-P selects the Logseq syntax; when non-nil and
-`logseq-org-sync-translate-emphasis' is enabled, org emphasis is
-translated to Markdown emphasis.  LOGSEQ-ROOT and LOGSEQ-PATH locate the
-page for file-link remapping."
+titles.  LOGSEQ-ROOT and LOGSEQ-PATH locate the page for file-link
+remapping."
   (logseq-org-sync-reconcile--translate-node
    node
    (lambda (text)
-     (let ((text (if (and markdown-p logseq-org-sync-translate-emphasis)
-                     (logseq-org-sync-reconcile--translate-org-emphasis text)
-                   text)))
-       (logseq-org-sync-reconcile--translate-roam-links
-        (logseq-org-sync-reconcile--translate-roam-text text block-registry)
-        uuid->title markdown-p logseq-root logseq-path)))))
-
-;;; ---------------------------------------------------------------------------
-;;; Cross-format block bodies (AGENTS.md §11.1 step 6, §11.2)
-;;; ---------------------------------------------------------------------------
-
-(defun logseq-org-sync-reconcile--md-fence-language (text)
-  "Return Markdown fence TEXT's info string, or nil when TEXT is not a fence.
-An empty string means a fence with no info string."
-  (when (and text
-             (string-match "\\`\\(`\\{3\\}\\)\\([^`]*\\)\\'" text))
-    (string-trim (match-string 2 text))))
-
-(defun logseq-org-sync-reconcile--md-body-content (body)
-  "Return BODY with a trailing Markdown closing fence line removed.
-Returns nil for a nil BODY."
-  (when body
-    (let ((lines (split-string body "\n")))
-      (if (and lines
-               (string-match-p "\\`[ \t]*`\\{3\\}[ \t]*\\'" (car (last lines))))
-          (let ((stripped (mapconcat #'identity (butlast lines) "\n")))
-            (and (not (string-empty-p stripped)) stripped))
-        body))))
-
-(defun logseq-org-sync-reconcile--md-pipe-row-p (line)
-  "Return non-nil when LINE is a Markdown pipe-table row."
-  (string-match-p "\\`|.*|\\'" (string-trim line)))
-
-(defun logseq-org-sync-reconcile--md-pipe-table-p (text)
-  "Return non-nil when TEXT is a Markdown pipe table.
-Every non-blank line must begin and end with `|'."
-  (and text (not (string-empty-p text))
-       (let ((ok t) (lines (split-string text "\n")))
-         (dolist (line lines)
-           (unless (or (string-blank-p (string-trim line))
-                       (logseq-org-sync-reconcile--md-pipe-row-p line))
-             (setq ok nil)))
-         ok)))
-
-(defun logseq-org-sync-reconcile--src-block (body)
-  "Return (LANG . CONTENT) when BODY is a single `#+BEGIN_SRC' block.
-Returns nil otherwise."
-  (when (and body
-             (string-match
-              "\\`#\\+BEGIN_SRC\\([ \t]+\\([^ \t\n]+\\)\\)?[^\n]*\n" body))
-    (let* ((lang (or (match-string 2 body) ""))
-           (content-start (match-end 0))
-           (content-end (and (string-match "\n#\\+END_SRC[ \t]*\\'" body)
-                             (match-beginning 0))))
-      (when content-end
-        (cons lang (if (>= content-start content-end)
-                       ""
-                     (substring body content-start content-end)))))))
-
-(defun logseq-org-sync-reconcile--set-body (block body)
-  "Return BLOCK with `:body' BODY, or without `:body' when BODY is empty."
-  (if (and body (not (string-empty-p body)))
-      (plist-put block :body body)
-    (let ((result nil) (rest block))
-      (while rest
-        (unless (eq (car rest) :body)
-          (setq result (plist-put result (car rest) (cadr rest))))
-        (setq rest (cddr rest)))
-      result)))
-
-(defun logseq-org-sync-reconcile--md-block-to-roam (block)
-  "Translate a Logseq Markdown BLOCK into an org-roam block.
-A fenced code block (whose `:text' is a ``````` opener) becomes a
-`#+BEGIN_SRC' body; a pipe table (whose full content is `| … |' rows) is
-wrapped verbatim in `#+BEGIN_SRC markdown' (§11.2).  Other blocks are
-returned unchanged."
-  (let* ((text (plist-get block :text))
-         (body (plist-get block :body))
-         (lang (logseq-org-sync-reconcile--md-fence-language text)))
-    (cond
-     (lang
-      (let* ((src-lang (if (string-empty-p lang) "" (concat " " lang)))
-             (content (logseq-org-sync-reconcile--md-body-content body))
-             (new-body (concat "#+BEGIN_SRC" src-lang "\n"
-                               (if content (concat content "\n") "")
-                               "#+END_SRC")))
-        (setq block (plist-put block :text ""))
-        (logseq-org-sync-reconcile--set-body block new-body)))
-     ((and text (logseq-org-sync-reconcile--md-pipe-table-p
-                 (concat text (if body (concat "\n" body) ""))))
-      (let* ((table (concat text (if body (concat "\n" body) "")))
-             (new-body (concat "#+BEGIN_SRC markdown\n" table "\n#+END_SRC")))
-        (setq block (plist-put block :text ""))
-        (logseq-org-sync-reconcile--set-body block new-body)))
-     (t block))))
-
-(defun logseq-org-sync-reconcile--roam-block-to-logseq (block)
-  "Translate an org-roam BLOCK into a Logseq Markdown block.
-A `#+BEGIN_SRC lang' body becomes a Markdown fence; a `#+BEGIN_SRC
-markdown' body holding a pipe table is unwrapped to a native table
-\(§11.2).  Other blocks are returned unchanged."
-  (let* ((body (plist-get block :body))
-         (src (logseq-org-sync-reconcile--src-block body)))
-    (cond
-     ((and src (string= (car src) "markdown")
-           (logseq-org-sync-reconcile--md-pipe-table-p (cdr src)))
-      (let* ((lines (split-string (cdr src) "\n"))
-             (header (car lines))
-             (rows (cdr lines)))
-        (setq block (plist-put block :text header))
-        (logseq-org-sync-reconcile--set-body
-         block (and rows (mapconcat #'identity rows "\n")))))
-     (src
-      (let* ((lang (car src))
-             (content (cdr src))
-             (new-body (concat content (if (string-empty-p content) "" "\n") "```")))
-        (setq block (plist-put block :text (concat "```" lang)))
-        (logseq-org-sync-reconcile--set-body block new-body)))
-     (t block))))
-
-(defun logseq-org-sync-reconcile--map-block-body (fn block)
-  "Return BLOCK transformed by FN (block -> block), recursing into children."
-  (let ((result (funcall fn block)))
-    (let ((children (plist-get result :children)))
-      (when children
-        (setq result
-              (plist-put result :children
-                         (mapcar (lambda (child)
-                                   (logseq-org-sync-reconcile--map-block-body
-                                    fn child))
-                                 children)))))
-    result))
-
-(defun logseq-org-sync-reconcile--node-bodies (node fn)
-  "Return NODE with each block transformed by FN (block -> block)."
-  (let ((content (plist-get node :content)))
-    (if content
-        (plist-put node :content
-                   (mapcar (lambda (block)
-                             (logseq-org-sync-reconcile--map-block-body fn block))
-                           content))
-      node)))
-
-(defun logseq-org-sync-reconcile--node-body-to-roam (node)
-  "Return NODE with Markdown block bodies translated to org-roam."
-  (logseq-org-sync-reconcile--node-bodies
-   node #'logseq-org-sync-reconcile--md-block-to-roam))
-
-(defun logseq-org-sync-reconcile--node-body-to-logseq (node)
-  "Return NODE with org-roam block bodies translated to Markdown."
-  (logseq-org-sync-reconcile--node-bodies
-   node #'logseq-org-sync-reconcile--roam-block-to-logseq))
+     (logseq-org-sync-reconcile--translate-roam-links
+      (logseq-org-sync-reconcile--translate-roam-text text block-registry)
+      uuid->title logseq-root logseq-path))))
 
 (defun logseq-org-sync-reconcile--plist-without (plist key)
   "Return PLIST with KEY removed."
@@ -1226,12 +801,11 @@ it then has no other content."
           (logseq-org-sync-reconcile--plist-without node :content))))))
 
 (defun logseq-org-sync-reconcile--translate-plan (plan logseq roam graph)
-  "Translate links, emphasis, block references and block bodies in PLAN.
+  "Translate links and block references in PLAN.
 LOGSEQ and ROAM are the two node tables; they supply the block
 registries used to resolve block UUIDs to text and the page maps used to
-translate page links.  GRAPH supplies the Logseq format, so URL/file
-links, emphasis and block bodies are only translated for Markdown graphs
-(org graphs already share org link and emphasis syntax)."
+translate page links.  GRAPH supplies the graph roots used to remap file
+links."
   (let* ((logseq-registry (logseq-org-sync-reconcile--block-registry
                            (hash-table-values logseq)))
          (roam-registry (logseq-org-sync-reconcile--block-registry
@@ -1239,23 +813,19 @@ links, emphasis and block bodies are only translated for Markdown graphs
          (page-maps (logseq-org-sync-reconcile--page-maps logseq roam))
          (title->uuids (car page-maps))
          (uuid->title (cdr page-maps))
-         (markdown-p (logseq-org-sync-reconcile--markdown-p graph))
          (logseq-root (plist-get graph :logseq-root)))
     (mapcar
      (lambda (action)
-                (let ((type (plist-get action :type))
-                    (node (plist-get action :node))
-                    (logseq-path (and (plist-get action :path)
-                                      (logseq-org-sync-reconcile--logseq-path
-                                       graph (plist-get action :path)))))
+       (let ((type (plist-get action :type))
+             (node (plist-get action :node))
+             (logseq-path (and (plist-get action :path)
+                               (logseq-org-sync-reconcile--logseq-path
+                                graph (plist-get action :path)))))
          (cond
           ((and node (memq type '(create-roam update-roam)))
            (let ((translated (logseq-org-sync-reconcile--node-to-roam
-                              node logseq-registry title->uuids markdown-p
+                              node logseq-registry title->uuids
                               logseq-root logseq-path)))
-             (when markdown-p
-               (setq translated
-                     (logseq-org-sync-reconcile--node-body-to-roam translated)))
              (when logseq-org-sync-drop-empty-blocks
                (setq translated
                      (logseq-org-sync-reconcile--node-drop-empty-blocks
@@ -1263,11 +833,8 @@ links, emphasis and block bodies are only translated for Markdown graphs
              (plist-put action :node translated)))
           ((and node (memq type '(create-logseq update-logseq)))
            (let ((translated (logseq-org-sync-reconcile--node-to-logseq
-                              node roam-registry uuid->title markdown-p
+                              node roam-registry uuid->title
                               logseq-root logseq-path)))
-             (when markdown-p
-               (setq translated
-                     (logseq-org-sync-reconcile--node-body-to-logseq translated)))
              (when logseq-org-sync-drop-empty-blocks
                (setq translated
                      (logseq-org-sync-reconcile--node-drop-empty-blocks
@@ -1280,8 +847,8 @@ links, emphasis and block bodies are only translated for Markdown graphs
   "Return an ordered reconciliation plan for GRAPH given the last-synced STATE.
 The plan is a list of action plists (see the file Commentary).  Planning
 reads files but performs no writes, so it is safe to call for a preview.
-Block references and block bodies in create/update nodes are translated
-for their target side (AGENTS.md §6, §11.1 step 6)."
+Block references in create/update nodes are translated for their target
+side (AGENTS.md §6)."
   (let ((logseq (logseq-org-sync-reconcile--scan-logseq graph))
         (roam (logseq-org-sync-reconcile--scan-roam graph))
         (ids nil)
