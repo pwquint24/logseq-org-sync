@@ -11,24 +11,20 @@
   sync), backed by Pandoc and two Lua filters.
 
 The sync engine only handles Logseq org graphs. Logseq Markdown graphs
-are no longer synced; they are imported and exported through the pandoc
-backend instead.
+can be imported, and then synced with a logseq org graph. 
 
-The full architecture is in `AGENTS.md`; the on-disk formats are in
+More details on the architecture is in `AGENTS.md`; the on-disk formats are in
 `LOGSEQ-FORMAT.org` and `ORG-ROAM-FORMAT.org`; the pandoc import/export
 design is in `PANDOC-TRANSLATE.md`.
 
-The whole thing is vibe coded using deepseek and ECA.
+The whole thing is vibe coded using DeepSeek and ECA.
 
 ## Installation
 
-The package is pure Emacs Lisp, so you only need the `.el` files on your
+The main package is pure Emacs Lisp, so you only need the `.el` files on your
 `load-path`. There is no build step and no non-Elisp runtime dependency.
-Pandoc is required only for Markdown import/export. The examples below
-install straight from GitHub with
-[straight.el](https://github.com/radian-software/straight.el);
-`(require 'logseq-org-sync)` pulls in the rest of the `.el` files in the
-package.
+Pandoc (and two lua filters) are required only for Markdown import/export. The
+package was tested with pandoc version 3.9.0.2. 
 
 ### Vanilla Emacs (straight.el)
 
@@ -94,24 +90,25 @@ put it on your `load-path`:
 (require 'logseq-org-sync)
 ```
 
-## TL;DR — sync a Logseq org graph
+## Sync a Logseq org graph
 
-1.  Install the package (see [Installation](#installation)) and
-    `(require 'logseq-org-sync)`.
-
-2.  Add a graph by picking its Logseq folder:
-
+1.  Add a graph by picking its Logseq folder:
     ``` emacs-lisp
     M-x logseq-org-sync-add-graph
     ```
 
-    This derives the graph name from the folder basename and mirrors it
+    This will prompt you to pick a logseq graph folder. 
+    Sync will derive the roam folder using the basename,  and syncing the graph
     into `<logseq-org-sync-roam-directory>/<name>`.
     `logseq-org-sync-roam-directory` defaults to `org-roam-directory`
-    when org-roam is loaded. Only Logseq org graphs can be added for
+    when org-roam is loaded. So for example if your org-roam directory is set to
+    ~/org-roam and you sync a logseq graph stored in ~/Downloads/mygraph the graph
+    would be synced by default to ~/org-roam/mygraph. Only Logseq org graphs can be added for
     sync; Markdown graphs are rejected with a pointer to import/export.
 
 3.  Sync it:
+
+    There are three different sync methods:
 
     ``` emacs-lisp
     M-x logseq-org-sync            ;; pick a graph, preview, apply
@@ -125,16 +122,42 @@ put it on your `load-path`:
     (add-hook 'after-save-hook #'logseq-org-sync-after-save)
     ```
 
-    and watch for changes made by the Logseq app:
+    there is also experimental support for watching for changes made by the Logseq app:
 
     ``` emacs-lisp
     M-x logseq-org-sync-watch      ;; choose a graph
     M-x logseq-org-sync-unwatch    ;; stop
     ```
+## Org Roam graph layout
 
-## TL;DR — import/export a Logseq Markdown graph
+    Your synced (or imported - see below) org roam graph will stick to the format of 
+    a logseq graph. Beneath the main folder there will be directories for 
+    journals and for pages. One consequence of this is that you may want to set up capture 
+    templates for org-roam that automatically put captures in the pages subdirectory. Here is an example
+    of a template (you can find more detail in the org-roam manual). This one captures either pages or
+    journal entries. 
+    
+    ``` emacs-lisp
+        '(;; Computing Graph
+          ("c" "Computing")
+          ("cp" "Computing Page" plain "%?"
+           :target (file+head "computing/pages/${slug}.org"
+                              "#+title: ${title}\n#+filetags: :computing:\n")
+           :unnarrowed t)
+          ("cj" "Computing Journal" entry "* %?"
+           :target (file+head "computing/journals/%<%Y_%m_%d>.org"
+                              "#+title: %<%Y_%m_%d>\n\n")
+           :unnarrowed t)
 
-These use Pandoc and require org-roam (for identity/link resolution).
+    ```
+
+
+## Import/export a Logseq Markdown graph
+
+You can import a logseq graph that you have started creating in Markdown and
+export an org-roam graph to logseq Markdown. These are not one hundred percent
+reliable, and so should not be used for syncing between logseq and roam. 
+Both use Pandoc and, of course, org-roam. 
 They live in `logseq-org-sync-pd.el`, which is not loaded by
 `(require 'logseq-org-sync)`; load it explicitly first:
 
@@ -163,7 +186,8 @@ restores file-level `id:` links to page links before conversion.
 - org-roam is **not** required to run the sync engine or its tests. The
   org-roam side is read and written directly; org-roam is only relevant
   as the place where the mirror lives and as the tool that indexes the
-  result.
+  result. But of course you will want it installed in order to edit
+  the graphs in emacs. 
 - Markdown import/export requires `pandoc` on `PATH` and the two Lua
   filters in `filters/`. Link resolution/restoration also requires
   org-roam.
@@ -172,11 +196,10 @@ restores file-level `id:` links to page links before conversion.
 
 Graphs live in the `logseq-org-sync-graphs` user option. Each entry only
 needs a name and a Logseq org folder; the org-roam mirror directory is
-derived.
+derived. This is automatically updated when you run logseq-org-sync-add-graph 
+and logseq-org-sync-remove-graph, you shouldn't need to edit it directly.
 
 ``` emacs-lisp
-(setq logseq-org-sync-roam-directory "~/org-roam")
-
 (setq logseq-org-sync-graphs
       '((:name "Work"     :logseq-root "~/graphs/Work")
         (:name "Personal" :logseq-root "~/graphs/Personal")))
@@ -191,6 +214,9 @@ Each mirror contains the same `pages/` and `journals/` subtrees as its
 Logseq graph. The mapping is 1:1 on the relative path within a graph;
 both sides use `.org`.
 
+You can use the logseq-org-sync-graphs variable to customise graph 
+structure:
+
 **Per-graph keys** (all optional except `:name` and `:logseq-root`):
 
 - `:roam-root` defaults to `<logseq-org-sync-roam-directory>/<name>`.
@@ -201,7 +227,7 @@ both sides use `.org`.
 
 **Format**
 
-The sync only supports Logseq graphs whose `config.edn` selects the org
+The sync commands only supports Logseq graphs whose `config.edn` selects the org
 format (`:preferred-format "Org"`). `logseq-org-sync-add-graph` checks
 this and refuses Markdown graphs; use import/export for those.
 
@@ -454,6 +480,8 @@ breakdown is in [STATE-CACHE.org](STATE-CACHE.org).
 
 ## Testing
 
+If you download the whole repository and want to check tests:
+
 ``` {.bash org-language="sh"}
 make test
 ```
@@ -494,3 +522,7 @@ Logseq communities:
   [Logseq-Demo-Graph](https://github.com/candideu/Logseq-Demo-Graph),
   and the paired Org graph under `Logseq-demo-graph-org/` serves as
   reference material for Logseq's native Org mode representation.
+
+<!-- 
+LocalWords:  logseq
+ -->
